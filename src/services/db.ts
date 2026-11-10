@@ -185,62 +185,65 @@ function saveLocalPendingOrders(orders: Order[]): void {
 // --------------------------------------------------------------------------
 
 export async function fetchProducts(forceRefresh = false): Promise<Product[]> {
-  if (!forceRefresh && cachedProducts !== null && cachedProducts.length > 0) {
+  if (!forceRefresh && cachedProducts !== null) {
     return cachedProducts;
   }
 
-  // 1. Fetch from Central Server (ensures all smartphones and PCs share exact same catalog)
+  // When Supabase is configured, it is the source of truth.
+  // Read in pages because Supabase commonly limits each response to 1,000 rows.
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const PAGE_SIZE = 1000;
+      const allProducts: Product[] = [];
+      for (let offset = 0; ; offset += PAGE_SIZE) {
+        const { data, error } = await supabase
+          .from('products')
+          .select('*')
+          .order('code', { ascending: true })
+          .range(offset, offset + PAGE_SIZE - 1);
+
+        if (error) throw error;
+        const page = (data || []) as Product[];
+        allProducts.push(...page);
+        if (page.length < PAGE_SIZE) break;
+      }
+
+      cachedProducts = allProducts;
+      await idbSaveAllProducts(allProducts);
+      return allProducts;
+    } catch (err) {
+      console.warn('Supabase fetch products error:', err);
+      // Do not show demo products when a Supabase project is configured.
+      const idbProducts = await idbGetAllProducts();
+      cachedProducts = idbProducts || [];
+      return cachedProducts;
+    }
+  }
+
+  // Legacy server API is used only when no Supabase project is configured.
   if (typeof window !== 'undefined') {
     try {
       const res = await fetch('/api/products');
       if (res.ok) {
         const data = await res.json();
-        if (data.success && Array.isArray(data.products) && data.products.length > 0) {
+        if (data.success && Array.isArray(data.products)) {
           cachedProducts = data.products;
           await idbSaveAllProducts(data.products);
           return data.products;
         }
       }
     } catch {
-      // Central server request failed, fallback to Supabase or IndexedDB
+      // Continue with local cache.
     }
   }
 
-  // 2. Fallback to Supabase if configured
-  const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .order('code', { ascending: true });
-
-      if (!error && data && data.length > 0) {
-        cachedProducts = data;
-        await idbSaveAllProducts(data);
-        // Sync to central server in background
-        if (typeof window !== 'undefined') {
-          fetch('/api/products/bulk', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ products: data }),
-          }).catch(() => {});
-        }
-        return data;
-      }
-    } catch (err) {
-      console.warn('Supabase fetch products error, using local catalog:', err);
-    }
-  }
-
-  // 3. Load from IndexedDB (local cache on device)
   const idbProducts = await idbGetAllProducts();
   if (idbProducts && idbProducts.length > 0) {
     cachedProducts = idbProducts;
     return idbProducts;
   }
 
-  // 4. First time launch fallback
   cachedProducts = INITIAL_PRODUCTS;
   await idbSaveAllProducts(INITIAL_PRODUCTS);
   return INITIAL_PRODUCTS;
@@ -249,92 +252,84 @@ export async function fetchProducts(forceRefresh = false): Promise<Product[]> {
 export async function importExcelProductsToDb(
   parsedRows: ExcelImportRow[]
 ): Promise<{ added: number; updated: number; total: number }> {
-  // Ensure we have current catalog loaded
-  const currentProducts = await fetchProducts();
+  // Refresh from the authoritative source before calculating additions/updates.
+  const currentProducts = await fetchProducts(true);
   const productMap = new Map<string, Product>();
-
-  for (const p of currentProducts) {
-    productMap.set(p.code, p);
-  }
+  for (const product of currentProducts) productMap.set(product.code, product);
 
   let added = 0;
   let updated = 0;
   const now = new Date().toISOString();
-
-  const toUpsertSupabase: Partial<Product>[] = [];
+  const rowsToSave: Array<{
+    code: string;
+    description: string;
+    unit_of_measure: string;
+    alternative_code: string | null;
+    updated_at: string;
+  }> = [];
 
   for (const row of parsedRows) {
-    if (!row.code || !row.description) continue;
+    if (!row.code || !row.description || !row.unit_of_measure) continue;
 
     const existing = productMap.get(row.code);
     if (existing) {
-      // Update description, UM (if provided), alternative_code
-      const updatedItem: Product = {
-        ...existing,
-        description: row.description,
-        unit_of_measure: row.unit_of_measure || existing.unit_of_measure,
-        alternative_code: row.alternative_code !== null ? row.alternative_code : existing.alternative_code,
-        updated_at: now,
-      };
-      productMap.set(row.code, updatedItem);
-      toUpsertSupabase.push(updatedItem);
       updated++;
     } else {
-      const newItem: Product = {
-        id: 'prod-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
-        code: row.code,
-        description: row.description,
-        unit_of_measure: row.unit_of_measure || 'PZ',
-        alternative_code: row.alternative_code || null,
-        created_at: now,
-        updated_at: now,
-      };
-      productMap.set(row.code, newItem);
-      toUpsertSupabase.push(newItem);
       added++;
     }
+
+    rowsToSave.push({
+      code: row.code,
+      description: row.description,
+      unit_of_measure: row.unit_of_measure,
+      alternative_code: row.alternative_code || null,
+      updated_at: now,
+    });
+  }
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    // Do not claim success unless every batch has been accepted by Supabase.
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < rowsToSave.length; i += BATCH_SIZE) {
+      const batch = rowsToSave.slice(i, i + BATCH_SIZE);
+      const { error } = await supabase
+        .from('products')
+        .upsert(batch, { onConflict: 'code' });
+      if (error) {
+        throw new Error(`Errore Supabase nel blocco ${Math.floor(i / BATCH_SIZE) + 1}: ${error.message}`);
+      }
+    }
+
+    // Reload from the database (paged) so local IDs match the UUIDs generated by PostgreSQL.
+    const savedProducts = await fetchProducts(true);
+    return { added, updated, total: savedProducts.length };
+  }
+
+  // Offline/local-only mode: keep a local catalog, but never send fake string IDs to UUID columns.
+  const nowLocal = new Date().toISOString();
+  for (const row of rowsToSave) {
+    const existing = productMap.get(row.code);
+    productMap.set(row.code, {
+      id: existing?.id || (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)),
+      code: row.code,
+      description: row.description,
+      unit_of_measure: row.unit_of_measure,
+      alternative_code: row.alternative_code,
+      created_at: existing?.created_at || nowLocal,
+      updated_at: nowLocal,
+    });
   }
 
   const newCatalog = Array.from(productMap.values()).sort((a, b) =>
     a.code.localeCompare(b.code, undefined, { numeric: true })
   );
-
-  // 1. Save to local IndexedDB (unlimited quota, offline instant search)
   cachedProducts = newCatalog;
   await idbSaveAllProducts(newCatalog);
-
-  // 2. Save centrally on Server to broadcast to all smartphones and computers
-  if (typeof window !== 'undefined') {
-    try {
-      await fetch('/api/products/bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ products: newCatalog }),
-      });
-    } catch (err) {
-      console.warn('Central server catalog save notice:', err);
-    }
-  }
-
-  // 3. Notify local listeners and same-browser tabs
   catalogListeners.forEach(listener => listener(newCatalog));
-  if (broadcastChannel) {
-    broadcastChannel.postMessage({ type: 'CATALOG_UPDATED' });
-  }
-
-  // 4. Sync to Supabase in batches of 250 in background if configured
-  const supabase = getSupabaseClient();
-  if (supabase && toUpsertSupabase.length > 0) {
-    try {
-      const BATCH_SIZE = 250;
-      for (let i = 0; i < toUpsertSupabase.length; i += BATCH_SIZE) {
-        const batch = toUpsertSupabase.slice(i, i + BATCH_SIZE);
-        await supabase.from('products').upsert(batch, { onConflict: 'code' });
-      }
-    } catch (err) {
-      console.warn('Background Supabase upsert error:', err);
-    }
-  }
+  if (broadcastChannel) broadcastChannel.postMessage({ type: 'CATALOG_UPDATED' });
 
   return { added, updated, total: newCatalog.length };
 }
