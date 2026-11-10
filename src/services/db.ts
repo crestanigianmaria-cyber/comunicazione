@@ -1,4 +1,4 @@
-import { CompanySettings, Order, OrderItem, OrderStatus, Product, ExcelImportRow } from '../types';
+import { CompanySettings, Order, OrderItem, OrderStatus, Product, ExcelImportRow, UserRole } from '../types';
 import { INITIAL_PRODUCTS } from '../data/initialCatalog';
 import { getSupabaseClient } from '../lib/supabase';
 import { playOrderNotificationChime } from '../lib/audio';
@@ -9,7 +9,6 @@ const STORAGE_KEY_ORDERS = 'magazzino_orders_v1';
 const STORAGE_KEY_ORDER_SEQ = 'magazzino_order_sequence_v1';
 const STORAGE_KEY_PENDING = 'magazzino_pending_orders_v1';
 const STORAGE_KEY_SETTINGS = 'magazzino_company_settings_v1';
-const STORAGE_KEY_PASSWORDS = 'magazzino_role_passwords_v1';
 
 // Clear legacy bloated localStorage products entry to eliminate quota errors
 try {
@@ -740,24 +739,78 @@ export function saveCompanySettings(settings: CompanySettings): void {
   }
 }
 
-export function verifyRoleLogin(role: 'magazzino' | 'ufficio', inputSecret: string): boolean {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_PASSWORDS);
-    const passwords = raw ? JSON.parse(raw) : DEFAULT_PASSWORDS;
-    const required = passwords[role] || DEFAULT_PASSWORDS[role];
-    return inputSecret.trim() === required;
-  } catch {
-    return inputSecret.trim() === DEFAULT_PASSWORDS[role];
+export async function signInRole(role: UserRole, inputSecret: string): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Connessione a Supabase non configurata.');
+
+  const email = role === 'magazzino' ? 'magazzino@saggin.local' : 'ufficio@saggin.local';
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password: inputSecret.trim(),
+  });
+
+  if (error || !data.user) {
+    throw new Error('PIN / password non corretti.');
+  }
+
+  const { data: roleRecord, error: roleError } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', data.user.id)
+    .maybeSingle();
+
+  if (roleError || roleRecord?.role !== role) {
+    await supabase.auth.signOut();
+    throw new Error('Questo account non è autorizzato per il ruolo selezionato.');
   }
 }
 
-export function changeRolePassword(role: 'magazzino' | 'ufficio', newPass: string): void {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_PASSWORDS);
-    const passwords = raw ? JSON.parse(raw) : { ...DEFAULT_PASSWORDS };
-    passwords[role] = newPass.trim();
-    localStorage.setItem(STORAGE_KEY_PASSWORDS, JSON.stringify(passwords));
-  } catch (err) {
-    console.error('Error changing password:', err);
+export async function getAuthenticatedRole(): Promise<UserRole | null> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData.user) return null;
+
+  const { data: roleRecord, error: roleError } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', userData.user.id)
+    .maybeSingle();
+
+  if (roleError || (roleRecord?.role !== 'magazzino' && roleRecord?.role !== 'ufficio')) {
+    await supabase.auth.signOut();
+    return null;
   }
+
+  return roleRecord.role as UserRole;
+}
+
+export async function signOutRole(): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+export async function changeRolePassword(role: UserRole, newPass: string): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Connessione a Supabase non configurata.');
+  if (!newPass.trim()) throw new Error('Inserisci una nuova password.');
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData.user) throw new Error('Sessione scaduta. Accedi nuovamente.');
+
+  const { data: roleRecord, error: roleError } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', userData.user.id)
+    .maybeSingle();
+
+  if (roleError || roleRecord?.role !== role) {
+    throw new Error('Puoi modificare solo le credenziali del ruolo attualmente autenticato.');
+  }
+
+  const { error } = await supabase.auth.updateUser({ password: newPass.trim() });
+  if (error) throw new Error(error.message);
 }
