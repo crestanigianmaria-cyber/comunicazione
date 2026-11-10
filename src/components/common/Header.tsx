@@ -1,17 +1,19 @@
 import React from 'react';
-import { Package, Volume2, VolumeX, LogOut, ArrowRightLeft } from 'lucide-react';
+import { Package, Volume2, VolumeX, LogOut, ArrowRightLeft, Bell } from 'lucide-react';
 import { UserRole, CompanySettings } from '../../types';
 import { PWAInstallButton } from './PWAInstallButton';
 import { isSoundEnabled, setSoundEnabled } from '../../lib/audio';
 
 interface HeaderProps {
   currentRole: UserRole | null;
-  activeView: 'magazzino' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_catalogo' | 'ufficio_impostazioni';
-  onNavigate: (view: 'magazzino' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_catalogo' | 'ufficio_impostazioni') => void;
+  activeView: 'magazzino' | 'magazzino_storico' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_cestino' | 'ufficio_catalogo' | 'ufficio_impostazioni';
+  onNavigate: (view: 'magazzino' | 'magazzino_storico' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_cestino' | 'ufficio_catalogo' | 'ufficio_impostazioni') => void;
   onLogout: () => void;
   onSwitchRole: () => void;
   companySettings: CompanySettings;
   isOnline: boolean;
+  notificationPermission: NotificationPermission;
+  onEnableNotifications: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,6 +24,8 @@ export const Header: React.FC<HeaderProps> = ({
   onSwitchRole,
   companySettings,
   isOnline,
+  notificationPermission,
+  onEnableNotifications,
 }) => {
   const [soundOn, setSoundOn] = React.useState(isSoundEnabled());
 
@@ -70,6 +74,14 @@ export const Header: React.FC<HeaderProps> = ({
                 Storico Completo
               </button>
               <button
+                onClick={() => onNavigate('ufficio_cestino')}
+                className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
+                  activeView === 'ufficio_cestino' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Cestino
+              </button>
+              <button
                 onClick={() => onNavigate('ufficio_catalogo')}
                 className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
                   activeView === 'ufficio_catalogo'
@@ -93,9 +105,16 @@ export const Header: React.FC<HeaderProps> = ({
           )}
 
           {currentRole === 'magazzino' && (
-            <span className="text-xs text-slate-400 font-medium whitespace-nowrap">
-              Interfaccia Operatore Magazzino
-            </span>
+            <>
+              <button
+                onClick={() => onNavigate('magazzino')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap ${activeView === 'magazzino' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'}`}
+              >Ordine</button>
+              <button
+                onClick={() => onNavigate('magazzino_storico')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap ${activeView === 'magazzino_storico' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'}`}
+              >Storico ordini</button>
+            </>
           )}
         </nav>
 
@@ -111,6 +130,36 @@ export const Header: React.FC<HeaderProps> = ({
             <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
             <span>{isOnline ? 'Online' : 'Offline'}</span>
           </div>
+
+          {currentRole === 'ufficio' && (
+            <button
+              onClick={onEnableNotifications}
+              disabled={notificationPermission !== 'default'}
+              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-semibold transition ${
+                notificationPermission === 'granted'
+                  ? 'text-emerald-300 bg-emerald-950/50 cursor-default'
+                  : notificationPermission === 'denied'
+                  ? 'text-amber-300 bg-amber-950/50 cursor-not-allowed'
+                  : 'text-blue-200 bg-blue-950/50 hover:bg-blue-900'
+              }`}
+              title={
+                notificationPermission === 'granted'
+                  ? 'Notifiche desktop attive'
+                  : notificationPermission === 'denied'
+                  ? 'Notifiche bloccate dal browser: abilitarle nelle impostazioni del sito'
+                  : 'Attiva le notifiche desktop per i nuovi ordini'
+              }
+            >
+              <Bell className="w-4 h-4" />
+              <span className="hidden sm:inline">
+                {notificationPermission === 'granted'
+                  ? 'Notifiche attive'
+                  : notificationPermission === 'denied'
+                  ? 'Notifiche bloccate'
+                  : 'Attiva notifiche'}
+              </span>
+            </button>
+          )}
 
           {/* Audio Chime Toggle */}
           <button
@@ -147,6 +196,18 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
       </div>
+      {currentRole === 'magazzino' && (
+        <div className="md:hidden max-w-7xl mx-auto px-4 pb-2 flex gap-2">
+          <button
+            onClick={() => onNavigate('magazzino')}
+            className={`flex-1 py-2 rounded-lg text-xs font-bold ${activeView === 'magazzino' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'}`}
+          >Nuovo ordine</button>
+          <button
+            onClick={() => onNavigate('magazzino_storico')}
+            className={`flex-1 py-2 rounded-lg text-xs font-bold ${activeView === 'magazzino_storico' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'}`}
+          >Storico ordini</button>
+        </div>
+      )}
     </header>
   );
 };

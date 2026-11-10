@@ -551,6 +551,44 @@ export async function createNewOrder(orderInput: {
   return newOrder;
 }
 
+export async function archiveOrder(orderId: string): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Connessione a Supabase non disponibile.');
+
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('orders')
+    .update({ archived_at: now, updated_at: now })
+    .eq('id', orderId);
+  if (error) throw error;
+
+  const updated = getLocalOrders().map(order =>
+    order.id === orderId ? { ...order, archived_at: now, updated_at: now } : order
+  );
+  saveLocalOrders(updated);
+  orderListeners.forEach(listener => listener(updated));
+  broadcastChannel?.postMessage({ type: 'ORDER_UPDATED', payload: { id: orderId, archived_at: now } });
+}
+
+export async function restoreOrder(orderId: string): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Connessione a Supabase non disponibile.');
+
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('orders')
+    .update({ archived_at: null, updated_at: now })
+    .eq('id', orderId);
+  if (error) throw error;
+
+  const updated = getLocalOrders().map(order =>
+    order.id === orderId ? { ...order, archived_at: null, updated_at: now } : order
+  );
+  saveLocalOrders(updated);
+  orderListeners.forEach(listener => listener(updated));
+  broadcastChannel?.postMessage({ type: 'ORDER_UPDATED', payload: { id: orderId, archived_at: null } });
+}
+
 export async function updateOrderStatus(orderId: string, newStatus: OrderStatus): Promise<Order> {
   const currentOrders = getLocalOrders();
   const targetIndex = currentOrders.findIndex(o => o.id === orderId);
@@ -700,7 +738,11 @@ export function subscribeToOrders(callback: OrderListener): () => void {
           async (payload) => {
             console.log('[Realtime] Orders change received:', payload);
             const freshOrders = await fetchOrders(true);
-            callback(freshOrders);
+            const insertedId = (payload.new as { id?: string } | null)?.id;
+            const insertedOrder = payload.eventType === 'INSERT' && insertedId
+              ? freshOrders.find(order => order.id === insertedId)
+              : undefined;
+            callback(freshOrders, insertedOrder);
             if (payload.eventType === 'INSERT') {
               playOrderNotificationChime();
             }

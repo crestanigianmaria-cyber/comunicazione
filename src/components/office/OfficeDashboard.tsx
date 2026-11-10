@@ -13,7 +13,9 @@ import {
   ArrowUpDown,
   BellRing,
   RotateCcw,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Trash2,
+  ArchiveRestore
 } from 'lucide-react';
 import { Order, OrderStatus, CompanySettings, Product } from '../../types';
 import { OrderDetailModal } from './OrderDetailModal';
@@ -28,6 +30,10 @@ interface OfficeDashboardProps {
   onClearNewOrderAlert: () => void;
   onOpenExcelModal: () => void;
   isHistoricView?: boolean;
+  isTrashView?: boolean;
+  readOnly?: boolean;
+  onArchiveOrder?: (order: Order) => Promise<void>;
+  onRestoreOrder?: (order: Order) => Promise<void>;
 }
 
 export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
@@ -38,6 +44,10 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
   onClearNewOrderAlert,
   onOpenExcelModal,
   isHistoricView = false,
+  isTrashView = false,
+  readOnly = false,
+  onArchiveOrder,
+  onRestoreOrder,
 }) => {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [printOrder, setPrintOrder] = useState<Order | null>(null);
@@ -47,13 +57,14 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
   const [statusFilter, setStatusFilter] = useState<'ALL' | OrderStatus>('ALL');
   const [dateFilter, setDateFilter] = useState<'ALL' | 'TODAY' | 'WEEK' | 'MONTH'>('ALL');
 
-  // KPI calculations
+  // KPI calculations: archived orders must not count in the active office dashboard.
   const kpiStats = useMemo(() => {
+    const activeOrders = orders.filter(order => !order.archived_at);
     let nuovi = 0;
     let inLavorazione = 0;
     let completati = 0;
 
-    for (const order of orders) {
+    for (const order of activeOrders) {
       if (order.status === 'NUOVO') nuovi++;
       else if (order.status === 'PRESO IN CARICO') inLavorazione++;
       else if (order.status === 'COMPLETATO') completati++;
@@ -63,13 +74,14 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
       nuovi,
       inLavorazione,
       completati,
-      totale: orders.length,
+      totale: activeOrders.length,
     };
   }, [orders]);
 
   // Filtered orders list
   const filteredOrders = useMemo(() => {
     return orders.filter(order => {
+      if (isTrashView ? !order.archived_at : (!readOnly && order.archived_at)) return false;
       // Status filter
       if (statusFilter !== 'ALL' && order.status !== statusFilter) {
         return false;
@@ -110,7 +122,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
 
       return true;
     });
-  }, [orders, statusFilter, dateFilter, searchQuery]);
+  }, [orders, statusFilter, dateFilter, searchQuery, isTrashView, readOnly]);
 
   const handleQuickStatusChange = async (e: React.MouseEvent, orderId: string, newStatus: OrderStatus) => {
     e.stopPropagation();
@@ -338,7 +350,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
         {filteredOrders.length === 0 ? (
           <div className="py-16 text-center text-slate-400">
             <Inbox className="w-12 h-12 stroke-1 mx-auto mb-2 text-slate-300" />
-            <h4 className="text-sm font-bold text-slate-700">Nessun ordine trovato</h4>
+            <h4 className="text-sm font-bold text-slate-700">{isTrashView ? 'Il cestino è vuoto' : 'Nessun ordine trovato'}</h4>
             <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
               {searchQuery || statusFilter !== 'ALL' || dateFilter !== 'ALL'
                 ? 'Prova a modificare i filtri di ricerca.'
@@ -441,6 +453,32 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                           >
                             <Eye className="w-4 h-4" />
                           </button>
+                          {!readOnly && !isTrashView && onArchiveOrder && (
+                            <button
+                              onClick={async () => {
+                                if (window.confirm('Spostare questo ordine nel cestino? Sarà recuperabile per 60 giorni.')) {
+                                  await onArchiveOrder(order);
+                                }
+                              }}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition"
+                              title="Sposta nel cestino"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                          {isTrashView && onRestoreOrder && (
+                            <button
+                              onClick={async () => {
+                                if (window.confirm('Ripristinare questo ordine? Tornerà visibile nella dashboard.')) {
+                                  await onRestoreOrder(order);
+                                }
+                              }}
+                              className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50 transition"
+                              title="Ripristina ordine"
+                            >
+                              <ArchiveRestore className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             onClick={() => setPrintOrder(order)}
                             className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition"
@@ -467,6 +505,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
           onClose={() => setSelectedOrder(null)}
           onOrderUpdated={(updated) => setSelectedOrder(updated)}
           onOpenPrint={(ord) => setPrintOrder(ord)}
+          readOnly={readOnly || isTrashView}
         />
       )}
 
