@@ -101,7 +101,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-xs font-bold text-slate-700">
-                  {selectedRole === 'magazzino' ? 'PIN / Password Magazzino' : 'Password Amministrativa Ufficio'}
+                  {selectedRole === 'magazzino' ? 'Password Magazzino' : 'Password Amministrativa Ufficio'}
                 </label>
 
               </div>
@@ -111,10 +111,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
                 </div>
                 <input
                   type={selectedRole === 'magazzino' ? 'password' : 'password'}
-                  inputMode={selectedRole === 'magazzino' ? 'numeric' : 'text'}
+                  inputMode="text"
+                  autoCapitalize="none"
+                  autoComplete="current-password"
+                  spellCheck={false}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={selectedRole === 'magazzino' ? 'Inserisci PIN Magazzino' : 'Inserisci password ufficio'}
+                  placeholder={selectedRole === 'magazzino' ? 'Inserisci password Magazzino' : 'Inserisci password ufficio'}
                   required
                   autoFocus
                   className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
