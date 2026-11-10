@@ -215,6 +215,7 @@ export default function App() {
         {activeView === 'ufficio_impostazioni' && (
           <SettingsModal
             initialSettings={companySettings}
+            currentRole={currentRole}
             onSettingsSaved={(newSettings) => setCompanySettings(newSettings)}
           />
         )}
