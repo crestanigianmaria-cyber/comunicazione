@@ -8,6 +8,8 @@ import {
   getCompanySettings,
   getAuthenticatedRole,
   signOutRole,
+  archiveOrder,
+  restoreOrder,
 } from './services/db';
 import { Header } from './components/common/Header';
 import { OfflineBanner } from './components/common/OfflineBanner';
@@ -19,7 +21,7 @@ import { SettingsModal } from './components/office/SettingsModal';
 import { ExcelImportModal } from './components/office/ExcelImportModal';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 
-type ActiveView = 'magazzino' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_catalogo' | 'ufficio_impostazioni';
+type ActiveView = 'magazzino' | 'magazzino_storico' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_cestino' | 'ufficio_catalogo' | 'ufficio_impostazioni';
 
 export default function App() {
   const { isOnline } = useOnlineStatus();
@@ -139,7 +141,7 @@ export default function App() {
   useEffect(() => {
     if (currentRole === 'magazzino') {
       setActiveView('magazzino');
-    } else if (currentRole === 'ufficio' && activeView === 'magazzino') {
+    } else if (currentRole === 'ufficio' && (activeView === 'magazzino' || activeView === 'magazzino_storico')) {
       setActiveView('ufficio_dashboard');
     }
   }, [currentRole]);
@@ -225,6 +227,19 @@ export default function App() {
           />
         )}
 
+        {activeView === 'magazzino_storico' && (
+          <OfficeDashboard
+            orders={orders}
+            products={products}
+            companySettings={companySettings}
+            newOrderAlert={null}
+            onClearNewOrderAlert={() => {}}
+            onOpenExcelModal={() => {}}
+            isHistoricView={true}
+            readOnly={true}
+          />
+        )}
+
         {/* INTERFACCIA UFFICIO: DASHBOARD */}
         {activeView === 'ufficio_dashboard' && (
           <OfficeDashboard
@@ -235,6 +250,10 @@ export default function App() {
             onClearNewOrderAlert={() => setNewOrderAlert(null)}
             onOpenExcelModal={() => setShowExcelModal(true)}
             isHistoricView={false}
+            onArchiveOrder={async (order) => {
+              await archiveOrder(order.id);
+              setOrders(await fetchOrders(true));
+            }}
           />
         )}
 
@@ -248,6 +267,23 @@ export default function App() {
             onClearNewOrderAlert={() => setNewOrderAlert(null)}
             onOpenExcelModal={() => setShowExcelModal(true)}
             isHistoricView={true}
+          />
+        )}
+
+        {activeView === 'ufficio_cestino' && (
+          <OfficeDashboard
+            orders={orders}
+            products={products}
+            companySettings={companySettings}
+            newOrderAlert={null}
+            onClearNewOrderAlert={() => {}}
+            onOpenExcelModal={() => {}}
+            isHistoricView={true}
+            isTrashView={true}
+            onRestoreOrder={async (order) => {
+              await restoreOrder(order.id);
+              setOrders(await fetchOrders(true));
+            }}
           />
         )}
 
