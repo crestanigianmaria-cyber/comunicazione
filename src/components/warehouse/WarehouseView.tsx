@@ -13,9 +13,11 @@ import {
   X,
   Check,
   Calculator,
-  Layers
+  Layers,
+  Receipt,
+  FileText
 } from 'lucide-react';
-import { Product, CompanySettings } from '../../types';
+import { Product, CompanySettings, OrderDocumentType, ORDER_DOCUMENT_LABELS } from '../../types';
 import { searchProducts } from '../../lib/search';
 import { createNewOrder } from '../../services/db';
 
@@ -39,6 +41,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   isProductsLoading = false,
 }) => {
   const [customerReference, setCustomerReference] = useState('');
+  const [documentType, setDocumentType] = useState<OrderDocumentType>('DDT');
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -165,6 +168,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     try {
       const newOrder = await createNewOrder({
         customer_reference: customerReference.trim() || null,
+        document_type: documentType,
         items: cart,
       });
 
@@ -172,6 +176,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       setShowConfirmModal(false);
       setCart([]);
       setCustomerReference('');
+      setDocumentType('DDT');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Errore durante l'invio dell'ordine";
       setSubmitError(msg);
@@ -184,6 +189,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     setSubmittedOrderNumber(null);
     setCart([]);
     setCustomerReference('');
+    setDocumentType('DDT');
     setSearchQuery('');
   };
 
@@ -209,6 +215,9 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
             L'ufficio di {companySettings.companyName || 'Saggin'} ha ricevuto l'ordine in tempo reale.
           </p>
 
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-blue-50 border border-blue-100 px-3 py-1.5 text-xs font-bold text-blue-800">
+            <FileText className="w-3.5 h-3.5" /> {ORDER_DOCUMENT_LABELS[documentType]}
+          </div>
           <div className="w-full bg-slate-950 rounded-2xl p-4 sm:p-5 mb-6 text-center shadow-inner">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">
               NUMERO PROGRESSIVO ASSEGNATO
@@ -271,6 +280,47 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
               placeholder="Riferimento cliente / Cantiere / Targa (facoltativo)"
               className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition placeholder:text-slate-400"
             />
+          </div>
+
+          {/* Document type selection */}
+          <div className="mt-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <label className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-slate-500">Tipo documento</label>
+              <span className="text-[10px] font-semibold text-slate-400">Selezionane uno</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {([
+                { value: 'SCONTRINO', icon: Receipt, hint: 'Vendita al banco' },
+                { value: 'DDT', icon: Truck, hint: 'Documento di trasporto' },
+                { value: 'FATTURA', icon: FileText, hint: 'Richiesta fattura' },
+                { value: 'NOTA_PRELIEVO', icon: Package, hint: 'Prelievo materiale' },
+              ] as const).map(option => {
+                const selected = documentType === option.value;
+                const Icon = option.icon;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setDocumentType(option.value)}
+                    className={`min-h-[76px] rounded-xl border-2 p-2.5 flex flex-col items-start justify-between text-left transition active:scale-[.98] focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${
+                      selected
+                        ? 'border-blue-600 bg-blue-50 shadow-sm'
+                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full gap-2">
+                      <Icon className={`w-5 h-5 ${selected ? 'text-blue-700' : 'text-slate-500'}`} />
+                      <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${selected ? 'border-blue-600 bg-blue-600' : 'border-slate-300'}`}>
+                        {selected && <Check className="w-3 h-3 text-white" />}
+                      </span>
+                    </div>
+                    <span className={`text-xs font-black leading-tight ${selected ? 'text-blue-900' : 'text-slate-800'}`}>{ORDER_DOCUMENT_LABELS[option.value]}</span>
+                    <span className="text-[9px] leading-tight text-slate-400">{option.hint}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
 
