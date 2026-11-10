@@ -41,7 +41,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   isProductsLoading = false,
 }) => {
   const [customerReference, setCustomerReference] = useState('');
-  const [documentType, setDocumentType] = useState<OrderDocumentType>('DDT');
+  const [documentType, setDocumentType] = useState<OrderDocumentType | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -80,6 +80,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
   // Handle adding product (one-touch add or increment)
   const handleAddProduct = (product: Product) => {
+    if (!documentType) return;
     triggerHaptic();
     setCart(prevCart => {
       const existingIndex = prevCart.findIndex(item => item.product.code === product.code);
@@ -160,7 +161,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
   // Order submission
   const handleConfirmSubmit = async () => {
-    if (cart.length === 0 || isSubmitting) return;
+    if (cart.length === 0 || isSubmitting || !documentType) return;
 
     setIsSubmitting(true);
     setSubmitError(null);
@@ -176,7 +177,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       setShowConfirmModal(false);
       setCart([]);
       setCustomerReference('');
-      setDocumentType('DDT');
+      setDocumentType(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Errore durante l'invio dell'ordine";
       setSubmitError(msg);
@@ -189,7 +190,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     setSubmittedOrderNumber(null);
     setCart([]);
     setCustomerReference('');
-    setDocumentType('DDT');
+    setDocumentType(null);
     setSearchQuery('');
   };
 
@@ -216,7 +217,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
           </p>
 
           <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-blue-50 border border-blue-100 px-3 py-1.5 text-xs font-bold text-blue-800">
-            <FileText className="w-3.5 h-3.5" /> {ORDER_DOCUMENT_LABELS[documentType]}
+            <FileText className="w-3.5 h-3.5" /> {documentType ? ORDER_DOCUMENT_LABELS[documentType] : 'Documento'}
           </div>
           <div className="w-full bg-slate-950 rounded-2xl p-4 sm:p-5 mb-6 text-center shadow-inner">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">
@@ -335,8 +336,8 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              disabled={isProductsLoading}
-              placeholder={isProductsLoading ? "Caricamento catalogo articoli..." : "Cerca per codice, descrizione o barcode..."}
+              disabled={isProductsLoading || !documentType}
+              placeholder={isProductsLoading ? "Caricamento catalogo articoli..." : !documentType ? "Seleziona prima il tipo documento..." : "Cerca per codice, descrizione o barcode..."}
               className="w-full pl-12 pr-12 py-3.5 bg-white border-2 border-slate-300 rounded-2xl text-sm font-bold shadow-sm focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 transition placeholder:text-slate-400"
             />
             {searchQuery && (
