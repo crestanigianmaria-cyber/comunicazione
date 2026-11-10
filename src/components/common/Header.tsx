@@ -1,5 +1,5 @@
 import React from 'react';
-import { Package, Volume2, VolumeX, LogOut, ArrowRightLeft } from 'lucide-react';
+import { Package, Volume2, VolumeX, LogOut, ArrowRightLeft, Bell } from 'lucide-react';
 import { UserRole, CompanySettings } from '../../types';
 import { PWAInstallButton } from './PWAInstallButton';
 import { isSoundEnabled, setSoundEnabled } from '../../lib/audio';
@@ -12,6 +12,8 @@ interface HeaderProps {
   onSwitchRole: () => void;
   companySettings: CompanySettings;
   isOnline: boolean;
+  notificationPermission: NotificationPermission;
+  onEnableNotifications: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -22,6 +24,8 @@ export const Header: React.FC<HeaderProps> = ({
   onSwitchRole,
   companySettings,
   isOnline,
+  notificationPermission,
+  onEnableNotifications,
 }) => {
   const [soundOn, setSoundOn] = React.useState(isSoundEnabled());
 
@@ -111,6 +115,36 @@ export const Header: React.FC<HeaderProps> = ({
             <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
             <span>{isOnline ? 'Online' : 'Offline'}</span>
           </div>
+
+          {currentRole === 'ufficio' && (
+            <button
+              onClick={onEnableNotifications}
+              disabled={notificationPermission !== 'default'}
+              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-semibold transition ${
+                notificationPermission === 'granted'
+                  ? 'text-emerald-300 bg-emerald-950/50 cursor-default'
+                  : notificationPermission === 'denied'
+                  ? 'text-amber-300 bg-amber-950/50 cursor-not-allowed'
+                  : 'text-blue-200 bg-blue-950/50 hover:bg-blue-900'
+              }`}
+              title={
+                notificationPermission === 'granted'
+                  ? 'Notifiche desktop attive'
+                  : notificationPermission === 'denied'
+                  ? 'Notifiche bloccate dal browser: abilitarle nelle impostazioni del sito'
+                  : 'Attiva le notifiche desktop per i nuovi ordini'
+              }
+            >
+              <Bell className="w-4 h-4" />
+              <span className="hidden sm:inline">
+                {notificationPermission === 'granted'
+                  ? 'Notifiche attive'
+                  : notificationPermission === 'denied'
+                  ? 'Notifiche bloccate'
+                  : 'Attiva notifiche'}
+              </span>
+            </button>
+          )}
 
           {/* Audio Chime Toggle */}
           <button
