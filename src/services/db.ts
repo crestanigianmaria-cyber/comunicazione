@@ -196,17 +196,44 @@ export async function fetchProducts(forceRefresh = false): Promise<Product[]> {
     try {
       const PAGE_SIZE = 1000;
       const allProducts: Product[] = [];
-      for (let offset = 0; ; offset += PAGE_SIZE) {
-        const { data, error } = await supabase
-          .from('products')
-          .select('*')
-          .order('code', { ascending: true })
-          .range(offset, offset + PAGE_SIZE - 1);
+      let lastCode: string | null = null;
+      let expectedCount: number | null = null;
 
+      // Keyset pagination is more reliable than large numeric offsets on PostgREST.
+      // Product codes are unique, so each page starts strictly after the previous one.
+      for (;;) {
+        const response = lastCode
+          ? await supabase
+              .from('products')
+              .select('*', { count: 'exact' })
+              .gt('code', lastCode)
+              .order('code', { ascending: true })
+              .limit(PAGE_SIZE)
+          : await supabase
+              .from('products')
+              .select('*', { count: 'exact' })
+              .order('code', { ascending: true })
+              .limit(PAGE_SIZE);
+
+        const { data, error, count } = response;
         if (error) throw error;
+        if (expectedCount === null && typeof count === 'number') {
+          expectedCount = count;
+        }
+
         const page = (data || []) as Product[];
+        if (page.length === 0) break;
+
         allProducts.push(...page);
+        lastCode = page[page.length - 1].code;
+
         if (page.length < PAGE_SIZE) break;
+      }
+
+      if (expectedCount !== null && allProducts.length !== expectedCount) {
+        throw new Error(
+          `Catalogo incompleto: scaricati ${allProducts.length} articoli su ${expectedCount} presenti in Supabase.`
+        );
       }
 
       cachedProducts = allProducts;
