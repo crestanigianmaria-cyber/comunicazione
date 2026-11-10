@@ -700,7 +700,11 @@ export function subscribeToOrders(callback: OrderListener): () => void {
           async (payload) => {
             console.log('[Realtime] Orders change received:', payload);
             const freshOrders = await fetchOrders(true);
-            callback(freshOrders);
+            const insertedId = (payload.new as { id?: string } | null)?.id;
+            const insertedOrder = payload.eventType === 'INSERT' && insertedId
+              ? freshOrders.find(order => order.id === insertedId)
+              : undefined;
+            callback(freshOrders, insertedOrder);
             if (payload.eventType === 'INSERT') {
               playOrderNotificationChime();
             }
