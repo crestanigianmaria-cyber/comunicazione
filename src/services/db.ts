@@ -239,11 +239,16 @@ export async function fetchProducts(forceRefresh = false): Promise<Product[]> {
       await idbSaveAllProducts(allProducts);
       return allProducts;
     } catch (err) {
-      console.warn('Supabase fetch products error:', err);
-      // Do not show demo products when a Supabase project is configured.
+      console.error('[Catalog] Supabase fetch failed:', err);
+      // Do not cache an empty fallback after a failed request: that would
+      // prevent a later retry and leave the warehouse search permanently empty.
       const idbProducts = await idbGetAllProducts();
-      cachedProducts = idbProducts || [];
-      return cachedProducts;
+      if (idbProducts && idbProducts.length > 0) {
+        cachedProducts = idbProducts;
+        return idbProducts;
+      }
+      cachedProducts = null;
+      return [];
     }
   }
 
