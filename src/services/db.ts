@@ -35,12 +35,12 @@ const catalogListeners = new Set<CatalogListener>();
 
 // Default company settings
 const DEFAULT_COMPANY_SETTINGS: CompanySettings = {
-  companyName: 'EDILMAGAZZINO SRL',
-  legalName: 'EdilMagazzino Forniture & Materiali Edili S.r.l.',
-  address: 'Via dell’Edilizia 42, 20100 Milano (MI)',
+  companyName: 'SAGGIN',
+  legalName: 'Saggin Guglielmo - Materiali Edili',
+  address: 'Sede e Magazzino Forniture Edili',
   vatNumber: 'IT 01234567890',
-  phone: '+39 02 9876543',
-  email: 'ordini@edilmagazzino.it',
+  phone: 'Tel. Magazzino / Ufficio',
+  email: 'ordini@saggin.it',
   notes: 'Materiale caricato su automezzo del cliente. Documento di trasporto interno per emissione bolla / fattura.',
 };
 

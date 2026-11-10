@@ -14,9 +14,9 @@ export default defineConfig(() => {
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg'],
         manifest: {
           id: '/',
-          name: 'Magazzino Edile - Digital WMS',
-          short_name: 'Magazzino',
-          description: 'Sistema di trasmissione ordini carico cantiere e magazzino materiali edili.',
+          name: 'Saggin - Magazzino Edile',
+          short_name: 'Saggin',
+          description: 'Sistema di trasmissione ordini carico cantiere Saggin Guglielmo Materiali Edili.',
           theme_color: '#0f172a',
           background_color: '#f8fafc',
           display: 'standalone',

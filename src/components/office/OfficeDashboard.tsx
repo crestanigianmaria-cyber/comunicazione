@@ -163,7 +163,14 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
       {!isHistoricView && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Card 1: Nuovi Ordini */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
+          <button
+            onClick={() => setStatusFilter(statusFilter === 'NUOVO' ? 'ALL' : 'NUOVO')}
+            className={`bg-white rounded-2xl p-5 border text-left transition shadow-xs flex items-center justify-between cursor-pointer ${
+              statusFilter === 'NUOVO'
+                ? 'border-amber-500 ring-2 ring-amber-500/20 bg-amber-50/20'
+                : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+            }`}
+          >
             <div>
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
                 Nuovi Ordini
@@ -173,13 +180,20 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
               </div>
               <span className="text-[11px] text-slate-400 mt-0.5 block">Da prendere in carico</span>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+            <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
               <Inbox className="w-6 h-6" />
             </div>
-          </div>
+          </button>
 
           {/* Card 2: In Lavorazione */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
+          <button
+            onClick={() => setStatusFilter(statusFilter === 'PRESO IN CARICO' ? 'ALL' : 'PRESO IN CARICO')}
+            className={`bg-white rounded-2xl p-5 border text-left transition shadow-xs flex items-center justify-between cursor-pointer ${
+              statusFilter === 'PRESO IN CARICO'
+                ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/20'
+                : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+            }`}
+          >
             <div>
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
                 In Lavorazione
@@ -189,13 +203,20 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
               </div>
               <span className="text-[11px] text-slate-400 mt-0.5 block">Presi in carico</span>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+            <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
               <Clock className="w-6 h-6" />
             </div>
-          </div>
+          </button>
 
           {/* Card 3: Completati */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
+          <button
+            onClick={() => setStatusFilter(statusFilter === 'COMPLETATO' ? 'ALL' : 'COMPLETATO')}
+            className={`bg-white rounded-2xl p-5 border text-left transition shadow-xs flex items-center justify-between cursor-pointer ${
+              statusFilter === 'COMPLETATO'
+                ? 'border-emerald-500 ring-2 ring-emerald-500/20 bg-emerald-50/20'
+                : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+            }`}
+          >
             <div>
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
                 Completati
@@ -205,13 +226,20 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
               </div>
               <span className="text-[11px] text-slate-400 mt-0.5 block">Bollati / Chiusi</span>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+            <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
               <CheckCircle2 className="w-6 h-6" />
             </div>
-          </div>
+          </button>
 
           {/* Card 4: Totale Ordini */}
-          <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex items-center justify-between">
+          <button
+            onClick={() => setStatusFilter('ALL')}
+            className={`bg-white rounded-2xl p-5 border text-left transition shadow-xs flex items-center justify-between cursor-pointer ${
+              statusFilter === 'ALL'
+                ? 'border-slate-900 ring-2 ring-slate-900/10'
+                : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
+            }`}
+          >
             <div>
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
                 Totale Ordini
@@ -219,12 +247,12 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
               <div className="text-3xl font-black font-mono tracking-tight text-slate-900 mt-1">
                 {kpiStats.totale}
               </div>
-              <span className="text-[11px] text-slate-400 mt-0.5 block">Registrati nel sistema</span>
+              <span className="text-[11px] text-slate-400 mt-0.5 block">Tutti gli ordini</span>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center">
+            <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center shrink-0">
               <Layers className="w-6 h-6" />
             </div>
-          </div>
+          </button>
         </div>
       )}
 
