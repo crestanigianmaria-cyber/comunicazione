@@ -6,6 +6,8 @@ import {
   subscribeToOrders,
   subscribeToCatalog,
   getCompanySettings,
+  getAuthenticatedRole,
+  signOutRole,
 } from './services/db';
 import { Header } from './components/common/Header';
 import { OfflineBanner } from './components/common/OfflineBanner';
@@ -23,13 +25,21 @@ export default function App() {
   const { isOnline } = useOnlineStatus();
 
   // Role authentication state
-  const [currentRole, setCurrentRole] = useState<UserRole | null>(() => {
-    try {
-      return (localStorage.getItem('magazzino_user_role') as UserRole) || null;
-    } catch {
-      return null;
-    }
-  });
+  const [currentRole, setCurrentRole] = useState<UserRole | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    getAuthenticatedRole()
+      .then((role) => {
+        if (isMounted) setCurrentRole(role);
+      })
+      .catch((error) => console.error('Errore ripristino sessione:', error))
+      .finally(() => {
+        if (isMounted) setAuthLoading(false);
+      });
+    return () => { isMounted = false; };
+  }, []);
 
   // Current active navigation view
   const [activeView, setActiveView] = useState<ActiveView>('magazzino');
@@ -48,8 +58,9 @@ export default function App() {
   // Role switch modal toggle
   const [showRoleModal, setShowRoleModal] = useState(false);
 
-  // Load initial products & orders
+  // Load shared data only after a valid Supabase session has been restored.
   useEffect(() => {
+    if (!currentRole) return;
     let isMounted = true;
 
     async function loadData() {
@@ -87,7 +98,7 @@ export default function App() {
       unsubOrders();
       unsubCatalog();
     };
-  }, []);
+  }, [currentRole]);
 
   // Update default view based on role
   useEffect(() => {
@@ -101,11 +112,6 @@ export default function App() {
   const handleLoginSuccess = (role: UserRole) => {
     setCurrentRole(role);
     setShowRoleModal(false);
-    try {
-      localStorage.setItem('magazzino_user_role', role);
-    } catch {
-      // Ignore
-    }
     if (role === 'magazzino') {
       setActiveView('magazzino');
     } else {
@@ -113,18 +119,25 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    setCurrentRole(null);
+  const handleLogout = async () => {
     try {
-      localStorage.removeItem('magazzino_user_role');
-    } catch {
-      // Ignore
+      await signOutRole();
+    } catch (error) {
+      console.error('Errore durante la disconnessione:', error);
+    } finally {
+      setCurrentRole(null);
+      setShowRoleModal(false);
     }
   };
 
   const handleSwitchRole = () => {
     setShowRoleModal(true);
   };
+
+  // Wait for Supabase to restore the persisted authentication session.
+  if (authLoading) {
+    return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white text-sm">Verifica accesso in corso...</div>;
+  }
 
   // If not logged in, or switching roles, show LoginModal
   if (!currentRole || showRoleModal) {
