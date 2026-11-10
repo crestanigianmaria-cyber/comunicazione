@@ -759,9 +759,22 @@ export async function signInRole(role: UserRole, inputSecret: string): Promise<v
     .eq('user_id', data.user.id)
     .maybeSingle();
 
-  if (roleError || roleRecord?.role !== role) {
+  if (roleError) {
     await supabase.auth.signOut();
-    throw new Error('Questo account non è autorizzato per il ruolo selezionato.');
+    console.error('[Auth] Errore durante la lettura di user_roles:', roleError);
+    throw new Error(`Accesso riuscito, ma impossibile verificare il ruolo: ${roleError.message}`);
+  }
+
+  if (!roleRecord) {
+    await supabase.auth.signOut();
+    console.error('[Auth] Nessun record user_roles trovato per:', data.user.id);
+    throw new Error('Accesso riuscito, ma non esiste un ruolo associato a questo account.');
+  }
+
+  if (roleRecord.role !== role) {
+    await supabase.auth.signOut();
+    console.error('[Auth] Ruolo non corrispondente:', { expected: role, actual: roleRecord.role, userId: data.user.id });
+    throw new Error(`Ruolo non corrispondente: selezionato "${role}", account associato a "${roleRecord.role}".`);
   }
 }
 
