@@ -385,23 +385,9 @@ export async function clearAllProducts(): Promise<void> {
 // --------------------------------------------------------------------------
 
 export async function fetchOrders(forceRefresh = false): Promise<Order[]> {
-  // 1. Fetch from Central Server
-  if (typeof window !== 'undefined') {
-    try {
-      const res = await fetch('/api/orders');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.orders)) {
-          saveLocalOrders(data.orders);
-          return data.orders;
-        }
-      }
-    } catch {
-      // Fallback
-    }
-  }
-
-  // 2. Fetch from Supabase
+  // Supabase is the single source of truth. Do not read /api/orders:
+  // on Vercel that legacy endpoint may return an empty server-side list,
+  // which previously overwrote valid local orders and hid database orders.
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
@@ -410,15 +396,22 @@ export async function fetchOrders(forceRefresh = false): Promise<Order[]> {
         .select('*, items:order_items(*)')
         .order('created_at', { ascending: false });
 
-      if (!ordersErr && ordersData) {
-        saveLocalOrders(ordersData);
-        return ordersData;
+      if (ordersErr) {
+        console.error('[Orders] Supabase read failed; preserving local cache:', ordersErr);
+      } else if (ordersData) {
+        const normalizedOrders = ordersData.map((order: any) => ({
+          ...order,
+          items: Array.isArray(order.items) ? order.items : [],
+        })) as Order[];
+        saveLocalOrders(normalizedOrders);
+        return normalizedOrders;
       }
     } catch (err) {
-      console.warn('Supabase fetch orders error, fallback to local:', err);
+      console.error('[Orders] Unexpected Supabase read failure; preserving local cache:', err);
     }
   }
 
+  // Only use local storage as a fallback when Supabase is unavailable or failed.
   if (cachedOrders === null || forceRefresh) {
     const idbOrders = await idbGetAllOrders();
     if (idbOrders && idbOrders.length > 0) {
@@ -700,15 +693,28 @@ export function subscribeToOrders(callback: OrderListener): () => void {
           'postgres_changes',
           { event: '*', schema: 'public', table: 'orders' },
           async (payload) => {
-            console.log('Supabase Realtime orders update received:', payload);
-            const freshOrders = await fetchOrders();
+            console.log('[Realtime] Orders change received:', payload);
+            const freshOrders = await fetchOrders(true);
             callback(freshOrders);
             if (payload.eventType === 'INSERT') {
               playOrderNotificationChime();
             }
           }
         )
-        .subscribe();
+        // Order headers and their items are inserted in two requests. Listen
+        // to item changes too, so the office refreshes after the items arrive.
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'order_items' },
+          async (payload) => {
+            console.log('[Realtime] Order items change received:', payload);
+            const freshOrders = await fetchOrders(true);
+            callback(freshOrders);
+          }
+        )
+        .subscribe((status, err) => {
+          console.log('[Realtime] Orders channel status:', status, err || '');
+        });
     } catch (err) {
       console.warn('Failed to subscribe to Supabase Realtime channel:', err);
     }
