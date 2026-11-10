@@ -551,6 +551,44 @@ export async function createNewOrder(orderInput: {
   return newOrder;
 }
 
+export async function archiveOrder(orderId: string): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Connessione a Supabase non disponibile.');
+
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('orders')
+    .update({ archived_at: now, updated_at: now })
+    .eq('id', orderId);
+  if (error) throw error;
+
+  const updated = getLocalOrders().map(order =>
+    order.id === orderId ? { ...order, archived_at: now, updated_at: now } : order
+  );
+  saveLocalOrders(updated);
+  orderListeners.forEach(listener => listener(updated));
+  broadcastChannel?.postMessage({ type: 'ORDER_UPDATED', payload: { id: orderId, archived_at: now } });
+}
+
+export async function restoreOrder(orderId: string): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Connessione a Supabase non disponibile.');
+
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from('orders')
+    .update({ archived_at: null, updated_at: now })
+    .eq('id', orderId);
+  if (error) throw error;
+
+  const updated = getLocalOrders().map(order =>
+    order.id === orderId ? { ...order, archived_at: null, updated_at: now } : order
+  );
+  saveLocalOrders(updated);
+  orderListeners.forEach(listener => listener(updated));
+  broadcastChannel?.postMessage({ type: 'ORDER_UPDATED', payload: { id: orderId, archived_at: null } });
+}
+
 export async function updateOrderStatus(orderId: string, newStatus: OrderStatus): Promise<Order> {
   const currentOrders = getLocalOrders();
   const targetIndex = currentOrders.findIndex(o => o.id === orderId);
