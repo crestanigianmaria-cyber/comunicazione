@@ -318,7 +318,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                   <button
                     key={prod.code}
                     onClick={() => handleAddProduct(prod)}
-                    className="w-full p-3.5 text-left hover:bg-blue-50/70 active:bg-blue-100 transition flex items-center justify-between gap-3 min-h-[56px]"
+                    className="w-full p-3.5 text-left hover:bg-blue-50/70 active:bg-blue-100 transition flex items-start justify-between gap-3 min-h-[56px]"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 mb-1">
@@ -334,12 +334,12 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                           </span>
                         )}
                       </div>
-                      <div className="text-xs font-bold text-slate-900 line-clamp-1">
+                      <div className="text-xs font-bold text-slate-900 whitespace-normal break-words leading-relaxed">
                         {prod.description}
                       </div>
                     </div>
 
-                    <div className="shrink-0 flex items-center justify-center w-10 h-10 rounded-full bg-blue-600 text-white shadow-md active:scale-90 transition">
+                    <div className="shrink-0 mt-1 flex items-center justify-center w-10 h-10 rounded-full bg-blue-600 text-white shadow-md active:scale-90 transition">
                       <Plus className="w-5 h-5 stroke-[3]" />
                     </div>
                   </button>
