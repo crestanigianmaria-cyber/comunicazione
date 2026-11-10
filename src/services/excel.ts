@@ -207,7 +207,7 @@ export async function parseExcelFile(
       description: rawDesc,
       unit_of_measure: rawUM,
       alternative_code: rawAlt || null,
-      isValid: errors.length === 0 || (errors.length === 1 && !rawUM), // Allow empty UM but flag it
+      isValid: errors.length === 0, // UM is required to preserve the source unit exactly
       errors,
     });
   }
