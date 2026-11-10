@@ -431,6 +431,7 @@ export async function fetchOrders(forceRefresh = false): Promise<Order[]> {
 
 export async function createNewOrder(orderInput: {
   customer_reference: string | null;
+  document_type?: import('../types').OrderDocumentType;
   items: {
     product: Product;
     quantity: number;
@@ -460,6 +461,7 @@ export async function createNewOrder(orderInput: {
     id: orderId,
     order_number: orderNumber,
     customer_reference: orderInput.customer_reference?.trim() || null,
+    document_type: orderInput.document_type ?? 'DDT',
     status: 'NUOVO',
     created_at: now,
     updated_at: now,
@@ -504,6 +506,7 @@ export async function createNewOrder(orderInput: {
           // The database trigger assigns a globally unique order number.
           order_number: '',
           customer_reference: newOrder.customer_reference,
+          document_type: newOrder.document_type,
           status: newOrder.status,
           created_at: newOrder.created_at,
           updated_at: newOrder.updated_at,
@@ -674,6 +677,7 @@ export async function syncPendingOrders(): Promise<{ synced: number; remaining: 
         id: order.id,
         order_number: order.order_number,
         customer_reference: order.customer_reference,
+        document_type: order.document_type ?? null,
         status: order.status,
         created_at: order.created_at,
         updated_at: order.updated_at,
