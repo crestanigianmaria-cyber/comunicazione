@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { UserRole, Order, Product, CompanySettings } from './types';
 import {
   fetchProducts,
@@ -52,6 +52,10 @@ export default function App() {
 
   // Real-time new order alert banner
   const [newOrderAlert, setNewOrderAlert] = useState<Order | null>(null);
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() =>
+    typeof Notification !== 'undefined' ? Notification.permission : 'denied'
+  );
+  const notifiedOrderIds = useRef<Set<string>>(new Set());
 
   // Global Excel Import Modal
   const [showExcelModal, setShowExcelModal] = useState(false);
@@ -93,8 +97,29 @@ export default function App() {
     // Subscribe to live order updates (Supabase Realtime + BroadcastChannel)
     const unsubOrders = subscribeToOrders((updatedOrders, newOrderEvent) => {
       setOrders(updatedOrders);
-      if (newOrderEvent) {
+      if (newOrderEvent && currentRole === 'ufficio') {
         setNewOrderAlert(newOrderEvent);
+
+        const orderId = newOrderEvent.id;
+        if (
+          orderId &&
+          !notifiedOrderIds.current.has(orderId) &&
+          typeof Notification !== 'undefined' &&
+          Notification.permission === 'granted'
+        ) {
+          notifiedOrderIds.current.add(orderId);
+          const reference = newOrderEvent.customer_reference ? ` · ${newOrderEvent.customer_reference}` : '';
+          const notification = new Notification('Nuovo ordine ricevuto', {
+            body: `${newOrderEvent.order_number || 'Nuovo ordine'}${reference}`,
+            icon: '/pwa-192x192.png',
+            tag: `magazzino-order-${orderId}`,
+          });
+          notification.onclick = () => {
+            window.focus();
+            setActiveView('ufficio_dashboard');
+            notification.close();
+          };
+        }
       }
     });
 
@@ -144,6 +169,16 @@ export default function App() {
     setShowRoleModal(true);
   };
 
+  const handleEnableNotifications = async () => {
+    if (typeof Notification === 'undefined') return;
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+    } catch (error) {
+      console.warn('Impossibile richiedere il permesso per le notifiche:', error);
+    }
+  };
+
   // Wait for Supabase to restore the persisted authentication session.
   if (authLoading) {
     return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white text-sm">Verifica accesso in corso...</div>;
@@ -173,6 +208,8 @@ export default function App() {
         onSwitchRole={handleSwitchRole}
         companySettings={companySettings}
         isOnline={isOnline}
+        notificationPermission={notificationPermission}
+        onEnableNotifications={handleEnableNotifications}
       />
 
       {/* Main View Area */}
