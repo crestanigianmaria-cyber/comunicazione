@@ -1,6 +1,6 @@
 import React from 'react';
 import { Printer, X, Download } from 'lucide-react';
-import { Order, CompanySettings } from '../../types';
+import { Order, CompanySettings, ORDER_DOCUMENT_LABELS } from '../../types';
 
 interface OrderPrintViewProps {
   order: Order;
@@ -73,7 +73,7 @@ export const OrderPrintView: React.FC<OrderPrintViewProps> = ({
 
             <div className="text-right">
               <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                DISTINTA DI CARICO MAGAZZINO
+                {order.document_type ? ORDER_DOCUMENT_LABELS[order.document_type].toUpperCase() : 'DDT'} · DISTINTA DI CARICO
               </span>
               <div className="text-2xl font-black font-mono tracking-wider text-slate-900 mt-0.5">
                 {order.order_number}
@@ -91,6 +91,12 @@ export const OrderPrintView: React.FC<OrderPrintViewProps> = ({
 
           {/* Customer / Jobsite Box */}
           <div className="bg-slate-50 border border-slate-300 rounded-lg p-4 mb-6">
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Tipo documento</span>
+              <span className="inline-flex rounded-md bg-white border border-slate-300 px-2.5 py-1 text-[10px] font-black uppercase text-slate-800">
+                {order.document_type ? ORDER_DOCUMENT_LABELS[order.document_type] : 'DDT'}
+              </span>
+            </div>
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
               Riferimento Cliente / Destinazione / Cantiere
             </span>

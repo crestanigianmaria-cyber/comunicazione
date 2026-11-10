@@ -13,9 +13,11 @@ import {
   X,
   Check,
   Calculator,
-  Layers
+  Layers,
+  Receipt,
+  FileText
 } from 'lucide-react';
-import { Product, CompanySettings } from '../../types';
+import { Product, CompanySettings, OrderDocumentType, ORDER_DOCUMENT_LABELS } from '../../types';
 import { searchProducts } from '../../lib/search';
 import { createNewOrder } from '../../services/db';
 
@@ -39,6 +41,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   isProductsLoading = false,
 }) => {
   const [customerReference, setCustomerReference] = useState('');
+  const [documentType, setDocumentType] = useState<OrderDocumentType | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -77,6 +80,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
   // Handle adding product (one-touch add or increment)
   const handleAddProduct = (product: Product) => {
+    if (!documentType) return;
     triggerHaptic();
     setCart(prevCart => {
       const existingIndex = prevCart.findIndex(item => item.product.code === product.code);
@@ -157,7 +161,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
   // Order submission
   const handleConfirmSubmit = async () => {
-    if (cart.length === 0 || isSubmitting) return;
+    if (cart.length === 0 || isSubmitting || !documentType) return;
 
     setIsSubmitting(true);
     setSubmitError(null);
@@ -165,6 +169,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     try {
       const newOrder = await createNewOrder({
         customer_reference: customerReference.trim() || null,
+        document_type: documentType,
         items: cart,
       });
 
@@ -172,6 +177,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       setShowConfirmModal(false);
       setCart([]);
       setCustomerReference('');
+      setDocumentType(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Errore durante l'invio dell'ordine";
       setSubmitError(msg);
@@ -184,6 +190,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     setSubmittedOrderNumber(null);
     setCart([]);
     setCustomerReference('');
+    setDocumentType(null);
     setSearchQuery('');
   };
 
@@ -209,6 +216,9 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
             L'ufficio di {companySettings.companyName || 'Saggin'} ha ricevuto l'ordine in tempo reale.
           </p>
 
+          <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-blue-50 border border-blue-100 px-3 py-1.5 text-xs font-bold text-blue-800">
+            <FileText className="w-3.5 h-3.5" /> {documentType ? ORDER_DOCUMENT_LABELS[documentType] : 'Documento'}
+          </div>
           <div className="w-full bg-slate-950 rounded-2xl p-4 sm:p-5 mb-6 text-center shadow-inner">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">
               NUMERO PROGRESSIVO ASSEGNATO
@@ -272,6 +282,47 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
               className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition placeholder:text-slate-400"
             />
           </div>
+
+          {/* Document type selection */}
+          <div className="mt-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <label className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-slate-500">Tipo documento</label>
+              <span className="text-[10px] font-semibold text-slate-400">Selezionane uno</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {([
+                { value: 'SCONTRINO', icon: Receipt, hint: 'Vendita al banco' },
+                { value: 'DDT', icon: Truck, hint: 'Documento di trasporto' },
+                { value: 'FATTURA', icon: FileText, hint: 'Richiesta fattura' },
+                { value: 'NOTA_PRELIEVO', icon: Package, hint: 'Prelievo materiale' },
+              ] as const).map(option => {
+                const selected = documentType === option.value;
+                const Icon = option.icon;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => setDocumentType(option.value)}
+                    className={`min-h-[76px] rounded-xl border-2 p-2.5 flex flex-col items-start justify-between text-left transition active:scale-[.98] focus:outline-none focus:ring-2 focus:ring-blue-500/30 ${
+                      selected
+                        ? 'border-blue-600 bg-blue-50 shadow-sm'
+                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between w-full gap-2">
+                      <Icon className={`w-5 h-5 ${selected ? 'text-blue-700' : 'text-slate-500'}`} />
+                      <span className={`w-4 h-4 rounded-full border flex items-center justify-center ${selected ? 'border-blue-600 bg-blue-600' : 'border-slate-300'}`}>
+                        {selected && <Check className="w-3 h-3 text-white" />}
+                      </span>
+                    </div>
+                    <span className={`text-xs font-black leading-tight ${selected ? 'text-blue-900' : 'text-slate-800'}`}>{ORDER_DOCUMENT_LABELS[option.value]}</span>
+                    <span className="text-[9px] leading-tight text-slate-400">{option.hint}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         {/* Primary Search Bar - Ergonomic Touch Zone */}
@@ -285,8 +336,8 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              disabled={isProductsLoading}
-              placeholder={isProductsLoading ? "Caricamento catalogo articoli..." : "Cerca per codice, descrizione o barcode..."}
+              disabled={isProductsLoading || !documentType}
+              placeholder={isProductsLoading ? "Caricamento catalogo articoli..." : !documentType ? "Seleziona prima il tipo documento..." : "Cerca per codice, descrizione o barcode..."}
               className="w-full pl-12 pr-12 py-3.5 bg-white border-2 border-slate-300 rounded-2xl text-sm font-bold shadow-sm focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 transition placeholder:text-slate-400"
             />
             {searchQuery && (
@@ -318,7 +369,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                   <button
                     key={prod.code}
                     onClick={() => handleAddProduct(prod)}
-                    className="w-full p-3.5 text-left hover:bg-blue-50/70 active:bg-blue-100 transition flex items-center justify-between gap-3 min-h-[56px]"
+                    className="w-full p-3.5 text-left hover:bg-blue-50/70 active:bg-blue-100 transition flex items-start justify-between gap-3 min-h-[56px]"
                   >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 mb-1">
@@ -334,12 +385,12 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                           </span>
                         )}
                       </div>
-                      <div className="text-xs font-bold text-slate-900 line-clamp-1">
+                      <div className="text-xs font-bold text-slate-900 whitespace-normal break-words leading-relaxed">
                         {prod.description}
                       </div>
                     </div>
 
-                    <div className="shrink-0 flex items-center justify-center w-10 h-10 rounded-full bg-blue-600 text-white shadow-md active:scale-90 transition">
+                    <div className="shrink-0 mt-1 flex items-center justify-center w-10 h-10 rounded-full bg-blue-600 text-white shadow-md active:scale-90 transition">
                       <Plus className="w-5 h-5 stroke-[3]" />
                     </div>
                   </button>
