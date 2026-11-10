@@ -30,6 +30,7 @@ export interface Order {
   status: OrderStatus;
   created_at: string;
   updated_at: string;
+  archived_at?: string | null;
   items: OrderItem[];
 }
 
