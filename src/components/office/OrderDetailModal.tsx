@@ -19,6 +19,7 @@ interface OrderDetailModalProps {
   onClose: () => void;
   onOrderUpdated: (updated: Order) => void;
   onOpenPrint: (order: Order) => void;
+  readOnly?: boolean;
 }
 
 export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
@@ -27,6 +28,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
   onClose,
   onOrderUpdated,
   onOpenPrint,
+  readOnly = false,
 }) => {
   const [currentOrder, setCurrentOrder] = useState<Order>(order);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -100,7 +102,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
           </div>
 
           {/* Status Buttons */}
-          <div>
+          {!readOnly && <div>
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1.5">
               Gestione Stato Ordine
             </span>
@@ -142,7 +144,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                 COMPLETATO
               </button>
             </div>
-          </div>
+          </div>}
         </div>
 
         {/* Snapshot Items Table */}
