@@ -632,6 +632,8 @@ export async function syncPendingOrders(): Promise<{ synced: number; remaining: 
 
   for (const order of pending) {
     try {
+      // Retry with INSERT ... ON CONFLICT DO NOTHING. This is deliberately
+      // idempotent and does not require UPDATE policies for warehouse users.
       const { error: ordErr } = await supabase.from('orders').upsert({
         id: order.id,
         order_number: order.order_number,
@@ -639,9 +641,10 @@ export async function syncPendingOrders(): Promise<{ synced: number; remaining: 
         status: order.status,
         created_at: order.created_at,
         updated_at: order.updated_at,
-      });
+      }, { onConflict: 'id', ignoreDuplicates: true });
 
       if (ordErr) {
+        console.warn('[Order sync] Failed to save order:', order.id, ordErr);
         stillPending.push(order);
         continue;
       }
@@ -658,7 +661,16 @@ export async function syncPendingOrders(): Promise<{ synced: number; remaining: 
         created_at: order.created_at,
       }));
 
-      await supabase.from('order_items').upsert(dbItems);
+      const { error: itemsErr } = await supabase
+        .from('order_items')
+        .upsert(dbItems, { onConflict: 'id', ignoreDuplicates: true });
+
+      if (itemsErr) {
+        console.warn('[Order sync] Failed to save order items:', order.id, itemsErr);
+        stillPending.push(order);
+        continue;
+      }
+
       synced++;
     } catch {
       stillPending.push(order);
