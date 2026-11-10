@@ -114,7 +114,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
                   inputMode={selectedRole === 'magazzino' ? 'numeric' : 'text'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={selectedRole === 'magazzino' ? 'Inserisci PIN (es. 1234)' : 'Inserisci password ufficio'}
+                  placeholder={selectedRole === 'magazzino' ? 'Inserisci PIN Magazzino' : 'Inserisci password ufficio'}
                   required
                   autoFocus
                   className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
