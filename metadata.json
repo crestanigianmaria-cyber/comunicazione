@@ -1,0 +1,6 @@
+{
+  "name": "Magazzino Edile - Digital WMS",
+  "description": "Sistema gestionale ordini di magazzino in tempo reale per materiali edili con interfaccia smartphone per operatori, dashboard desktop ufficio, importazione catalogo Excel e supporto PWA.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
