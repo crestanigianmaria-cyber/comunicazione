@@ -30,13 +30,40 @@ export function getStoredSupabaseConfig(): SupabaseConfig {
   };
 }
 
-export function saveSupabaseConfig(url: string, anonKey: string): void {
+// Automatically sync with server config on startup
+if (typeof window !== 'undefined') {
+  fetch('/api/config')
+    .then(res => res.json())
+    .then(data => {
+      if (data?.config?.supabaseUrl && data?.config?.supabaseAnonKey) {
+        const current = getStoredSupabaseConfig();
+        if (!current.url || !current.anonKey) {
+          saveSupabaseConfig(data.config.supabaseUrl, data.config.supabaseAnonKey, false);
+        }
+      }
+    })
+    .catch(() => {
+      // Ignore background config fetch error
+    });
+}
+
+export function saveSupabaseConfig(url: string, anonKey: string, syncToServer = true): void {
   try {
     localStorage.setItem(STORAGE_KEY_URL, url.trim());
     localStorage.setItem(STORAGE_KEY_KEY, anonKey.trim());
     cachedClient = null; // Reset client
   } catch (err) {
     console.error('Failed to save Supabase config in localStorage:', err);
+  }
+
+  if (syncToServer && typeof window !== 'undefined') {
+    fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supabaseUrl: url.trim(), supabaseAnonKey: anonKey.trim() }),
+    }).catch(err => {
+      console.warn('Failed to sync config to server:', err);
+    });
   }
 }
 

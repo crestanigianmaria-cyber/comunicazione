@@ -50,14 +50,13 @@ const DEFAULT_PASSWORDS = {
   ufficio: 'ufficio2026',
 };
 
-// Initialize BroadcastChannel listener
+// Initialize BroadcastChannel listener for same-browser multi-tab sync
 if (broadcastChannel) {
   broadcastChannel.onmessage = async (event) => {
     const { type, payload } = event.data || {};
     if (type === 'NEW_ORDER') {
       const orders = getLocalOrders();
       orderListeners.forEach(listener => listener(orders, payload));
-      // Play chime in other tabs if office
       playOrderNotificationChime();
     } else if (type === 'ORDER_UPDATED') {
       const orders = getLocalOrders();
@@ -68,6 +67,41 @@ if (broadcastChannel) {
       catalogListeners.forEach(listener => listener(prods));
     }
   };
+}
+
+// Initialize Server-Sent Events (SSE) for Real-Time Cross-Device Communication
+if (typeof window !== 'undefined' && typeof EventSource !== 'undefined') {
+  let evtSource: EventSource | null = null;
+  const connectSSE = () => {
+    try {
+      evtSource = new EventSource('/api/events');
+      evtSource.onmessage = async (e) => {
+        try {
+          const parsed = JSON.parse(e.data);
+          if (parsed.type === 'NEW_ORDER') {
+            const freshOrders = await fetchOrders(true);
+            orderListeners.forEach(listener => listener(freshOrders, parsed.payload));
+            playOrderNotificationChime();
+          } else if (parsed.type === 'ORDER_UPDATED') {
+            const freshOrders = await fetchOrders(true);
+            orderListeners.forEach(listener => listener(freshOrders));
+          } else if (parsed.type === 'CATALOG_UPDATED') {
+            const freshProds = await fetchProducts(true);
+            catalogListeners.forEach(listener => listener(freshProds));
+          }
+        } catch {
+          // Ignore parsing issues
+        }
+      };
+      evtSource.onerror = () => {
+        evtSource?.close();
+        setTimeout(connectSSE, 4000);
+      };
+    } catch {
+      // Ignore
+    }
+  };
+  connectSSE();
 }
 
 // --------------------------------------------------------------------------
@@ -150,11 +184,29 @@ function saveLocalPendingOrders(orders: Order[]): void {
 // CATALOG OPERATIONS (Backed by IndexedDB with in-memory caching)
 // --------------------------------------------------------------------------
 
-export async function fetchProducts(): Promise<Product[]> {
-  if (cachedProducts !== null && cachedProducts.length > 0) {
+export async function fetchProducts(forceRefresh = false): Promise<Product[]> {
+  if (!forceRefresh && cachedProducts !== null && cachedProducts.length > 0) {
     return cachedProducts;
   }
 
+  // 1. Fetch from Central Server (ensures all smartphones and PCs share exact same catalog)
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/products');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.products) && data.products.length > 0) {
+          cachedProducts = data.products;
+          await idbSaveAllProducts(data.products);
+          return data.products;
+        }
+      }
+    } catch {
+      // Central server request failed, fallback to Supabase or IndexedDB
+    }
+  }
+
+  // 2. Fallback to Supabase if configured
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
@@ -166,6 +218,14 @@ export async function fetchProducts(): Promise<Product[]> {
       if (!error && data && data.length > 0) {
         cachedProducts = data;
         await idbSaveAllProducts(data);
+        // Sync to central server in background
+        if (typeof window !== 'undefined') {
+          fetch('/api/products/bulk', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ products: data }),
+          }).catch(() => {});
+        }
         return data;
       }
     } catch (err) {
@@ -173,14 +233,14 @@ export async function fetchProducts(): Promise<Product[]> {
     }
   }
 
-  // Load from IndexedDB
+  // 3. Load from IndexedDB (local cache on device)
   const idbProducts = await idbGetAllProducts();
   if (idbProducts && idbProducts.length > 0) {
     cachedProducts = idbProducts;
     return idbProducts;
   }
 
-  // First time launch fallback
+  // 4. First time launch fallback
   cachedProducts = INITIAL_PRODUCTS;
   await idbSaveAllProducts(INITIAL_PRODUCTS);
   return INITIAL_PRODUCTS;
@@ -239,17 +299,30 @@ export async function importExcelProductsToDb(
     a.code.localeCompare(b.code, undefined, { numeric: true })
   );
 
-  // Save to IndexedDB (unlimited quota, supports 100,000+ items)
+  // 1. Save to local IndexedDB (unlimited quota, offline instant search)
   cachedProducts = newCatalog;
   await idbSaveAllProducts(newCatalog);
 
-  // Notify listeners and other open tabs
+  // 2. Save centrally on Server to broadcast to all smartphones and computers
+  if (typeof window !== 'undefined') {
+    try {
+      await fetch('/api/products/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ products: newCatalog }),
+      });
+    } catch (err) {
+      console.warn('Central server catalog save notice:', err);
+    }
+  }
+
+  // 3. Notify local listeners and same-browser tabs
   catalogListeners.forEach(listener => listener(newCatalog));
   if (broadcastChannel) {
     broadcastChannel.postMessage({ type: 'CATALOG_UPDATED' });
   }
 
-  // Sync to Supabase in batches of 250 in background if configured
+  // 4. Sync to Supabase in batches of 250 in background if configured
   const supabase = getSupabaseClient();
   if (supabase && toUpsertSupabase.length > 0) {
     try {
@@ -269,6 +342,9 @@ export async function importExcelProductsToDb(
 export async function clearAllProducts(): Promise<void> {
   cachedProducts = [];
   await idbClearProducts();
+  if (typeof window !== 'undefined') {
+    fetch('/api/products', { method: 'DELETE' }).catch(() => {});
+  }
   catalogListeners.forEach(listener => listener([]));
   if (broadcastChannel) {
     broadcastChannel.postMessage({ type: 'CATALOG_UPDATED' });
@@ -287,7 +363,24 @@ export async function clearAllProducts(): Promise<void> {
 // ORDERS OPERATIONS
 // --------------------------------------------------------------------------
 
-export async function fetchOrders(): Promise<Order[]> {
+export async function fetchOrders(forceRefresh = false): Promise<Order[]> {
+  // 1. Fetch from Central Server
+  if (typeof window !== 'undefined') {
+    try {
+      const res = await fetch('/api/orders');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.orders)) {
+          saveLocalOrders(data.orders);
+          return data.orders;
+        }
+      }
+    } catch {
+      // Fallback
+    }
+  }
+
+  // 2. Fetch from Supabase
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
@@ -305,7 +398,7 @@ export async function fetchOrders(): Promise<Order[]> {
     }
   }
 
-  if (cachedOrders === null) {
+  if (cachedOrders === null || forceRefresh) {
     const idbOrders = await idbGetAllOrders();
     if (idbOrders && idbOrders.length > 0) {
       cachedOrders = idbOrders;
@@ -367,7 +460,18 @@ export async function createNewOrder(orderInput: {
     broadcastChannel.postMessage({ type: 'NEW_ORDER', payload: newOrder });
   }
 
-  // 4. If online and Supabase is configured, push to Supabase
+  // 4. Send to Central Server so all desktop computers and smartphones receive it immediately
+  if (typeof window !== 'undefined') {
+    fetch('/api/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(newOrder),
+    }).catch(err => {
+      console.warn('Central server order post notice:', err);
+    });
+  }
+
+  // 5. If online and Supabase is configured, push to Supabase
   const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
   const supabase = getSupabaseClient();
 
@@ -442,6 +546,17 @@ export async function updateOrderStatus(orderId: string, newStatus: OrderStatus)
   orderListeners.forEach(l => l(currentOrders));
   if (broadcastChannel) {
     broadcastChannel.postMessage({ type: 'ORDER_UPDATED', payload: updatedOrder });
+  }
+
+  // Update on central server
+  if (typeof window !== 'undefined') {
+    fetch(`/api/orders/${orderId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus }),
+    }).catch(err => {
+      console.warn('Failed to update status on central server:', err);
+    });
   }
 
   // Update Supabase if available

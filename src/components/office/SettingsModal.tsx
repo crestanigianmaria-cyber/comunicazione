@@ -271,10 +271,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
             <h4 className="text-xs font-bold text-slate-900 mb-1 flex items-center gap-1.5">
               <Database className="w-4 h-4 text-blue-600" />
-              <span>Integrazione Supabase Realtime & PostgreSQL</span>
+              <span>Integrazione Supabase Cloud & Sincronizzazione Multi-Dispositivo</span>
             </h4>
             <p className="text-xs text-slate-600 leading-relaxed">
-              L'applicazione funziona sia in modalità <strong>Offline/Locale Realtime</strong> (tramite sincronizzazione istantanea interna), sia collegandosi direttamente al tuo database <strong>Supabase</strong>.
+              L'applicazione dispone già di <strong>sincronizzazione automatica in tempo reale</strong> tra tutti i computer dell'ufficio e gli smartphone del magazzino. Inserendo qui le credenziali <strong>Supabase</strong>, il catalogo e gli ordini vengono memorizzati anche sul cloud PostgreSQL permanente e condivisi istantaneamente con tutti i telefoni.
             </p>
           </div>
 

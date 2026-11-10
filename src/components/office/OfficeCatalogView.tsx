@@ -42,13 +42,16 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
       <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 mb-1">
-            <span className="w-2 h-2 rounded-full bg-emerald-600" />
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 animate-pulse" />
             <h2 className="text-base font-extrabold text-slate-900 uppercase">
-              Catalogo Articoli Magazzino
+              Catalogo Articoli Saggin
             </h2>
+            <span className="px-2 py-0.5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-bold">
+              Sincronizzato Multi-Dispositivo
+            </span>
           </div>
           <p className="text-xs text-slate-500">
-            {products.length} articoli registrati nel database · Colonne A (Codice), B (Descrizione), UM (Unità di Misura), N (Cod. Alternativo).
+            {products.length} articoli registrati · Condivisi in tempo reale tra computer ufficio e smartphone magazzinieri.
           </p>
         </div>
 
