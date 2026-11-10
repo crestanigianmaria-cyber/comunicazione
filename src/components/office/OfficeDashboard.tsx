@@ -57,13 +57,14 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
   const [statusFilter, setStatusFilter] = useState<'ALL' | OrderStatus>('ALL');
   const [dateFilter, setDateFilter] = useState<'ALL' | 'TODAY' | 'WEEK' | 'MONTH'>('ALL');
 
-  // KPI calculations
+  // KPI calculations: archived orders must not count in the active office dashboard.
   const kpiStats = useMemo(() => {
+    const activeOrders = orders.filter(order => !order.archived_at);
     let nuovi = 0;
     let inLavorazione = 0;
     let completati = 0;
 
-    for (const order of orders) {
+    for (const order of activeOrders) {
       if (order.status === 'NUOVO') nuovi++;
       else if (order.status === 'PRESO IN CARICO') inLavorazione++;
       else if (order.status === 'COMPLETATO') completati++;
@@ -73,7 +74,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
       nuovi,
       inLavorazione,
       completati,
-      totale: orders.length,
+      totale: activeOrders.length,
     };
   }, [orders]);
 
