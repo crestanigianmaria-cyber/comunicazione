@@ -10,7 +10,7 @@ import {
   Truck,
   ArrowRight
 } from 'lucide-react';
-import { Order, OrderStatus, CompanySettings } from '../../types';
+import { Order, OrderStatus, CompanySettings, ORDER_DOCUMENT_LABELS } from '../../types';
 import { updateOrderStatus } from '../../services/db';
 
 interface OrderDetailModalProps {
@@ -92,12 +92,22 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
 
         {/* Customer Reference & Status Control Bar */}
         <div className="p-4 sm:p-5 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                Tipo documento
+              </span>
+              <span className="inline-flex mt-1 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-800">
+                {currentOrder.document_type ? ORDER_DOCUMENT_LABELS[currentOrder.document_type] : 'DDT'}
+              </span>
+            </div>
+            <div>
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
               Cliente / Riferimento Cantiere
             </span>
             <div className="text-base font-bold text-slate-900 mt-0.5">
               {currentOrder.customer_reference || 'Carico al banco senza riferimento specificato'}
+            </div>
             </div>
           </div>
 
