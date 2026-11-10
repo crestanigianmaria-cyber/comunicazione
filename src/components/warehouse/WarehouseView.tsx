@@ -28,6 +28,7 @@ interface WarehouseViewProps {
   products: Product[];
   companySettings: CompanySettings;
   isOnline: boolean;
+  isProductsLoading?: boolean;
   onOpenExcelModal?: () => void;
 }
 
@@ -35,6 +36,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   products,
   companySettings,
   isOnline,
+  isProductsLoading = false,
 }) => {
   const [customerReference, setCustomerReference] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -283,7 +285,8 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Cerca per codice, descrizione o barcode..."
+              disabled={isProductsLoading}
+              placeholder={isProductsLoading ? "Caricamento catalogo articoli..." : "Cerca per codice, descrizione o barcode..."}
               className="w-full pl-12 pr-12 py-3.5 bg-white border-2 border-slate-300 rounded-2xl text-sm font-bold shadow-sm focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-500/20 transition placeholder:text-slate-400"
             />
             {searchQuery && (
@@ -297,8 +300,14 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
             )}
           </div>
 
+          {isProductsLoading && (
+            <div className="mt-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-center text-xs font-semibold text-blue-800">
+              Caricamento del catalogo articoli da Supabase. La ricerca sarà disponibile tra pochi istanti.
+            </div>
+          )}
+
           {/* Search Instant Results Dropdown Panel */}
-          {searchQuery.trim() && (
+          {!isProductsLoading && searchQuery.trim() && (
             <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-white rounded-2xl shadow-2xl border border-slate-200 max-h-80 overflow-y-auto divide-y divide-slate-100">
               {searchResults.length === 0 ? (
                 <div className="p-5 text-center text-xs font-bold text-slate-500">

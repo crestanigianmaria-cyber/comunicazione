@@ -73,7 +73,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
     setIsImporting(true);
 
     try {
-      const validRows = summary.rows.filter(r => r.code && r.description);
+      const validRows = summary.rows.filter(r => r.isValid && r.code && r.description && r.unit_of_measure);
       const res = await importExcelProductsToDb(validRows);
       setImportResult(res);
       onImportCompleted(res.total);

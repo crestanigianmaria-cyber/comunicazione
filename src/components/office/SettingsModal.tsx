@@ -14,18 +14,20 @@ import {
   CheckCircle2,
   AlertCircle
 } from 'lucide-react';
-import { CompanySettings, SupabaseConfig } from '../../types';
+import { CompanySettings, SupabaseConfig, UserRole } from '../../types';
 import { saveCompanySettings, changeRolePassword } from '../../services/db';
 import { getStoredSupabaseConfig, saveSupabaseConfig, testSupabaseConnection } from '../../lib/supabase';
 
 interface SettingsModalProps {
   initialSettings: CompanySettings;
   onSettingsSaved: (newSettings: CompanySettings) => void;
+  currentRole: UserRole;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   initialSettings,
   onSettingsSaved,
+  currentRole,
 }) => {
   const [activeTab, setActiveTab] = useState<'company' | 'supabase' | 'sql' | 'passwords' | 'ionos'>('company');
 
@@ -69,18 +71,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  const handleSavePasswords = (e: React.FormEvent) => {
+  const handleSavePasswords = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (magazzinoPin.trim()) {
-      changeRolePassword('magazzino', magazzinoPin.trim());
+    const newPassword = currentRole === 'magazzino' ? magazzinoPin.trim() : ufficioPass.trim();
+    if (!newPassword) return;
+
+    try {
+      await changeRolePassword(currentRole, newPassword);
+      setPassNotice('Credenziale aggiornata correttamente su Supabase.');
+      setMagazzinoPin('');
+      setUfficioPass('');
+    } catch (err) {
+      setPassNotice(err instanceof Error ? err.message : 'Errore durante l’aggiornamento.');
     }
-    if (ufficioPass.trim()) {
-      changeRolePassword('ufficio', ufficioPass.trim());
-    }
-    setPassNotice('Password aggiornate correttamente.');
-    setMagazzinoPin('');
-    setUfficioPass('');
-    setTimeout(() => setPassNotice(null), 3000);
+    setTimeout(() => setPassNotice(null), 4000);
   };
 
   const handleCopySQL = () => {
@@ -422,31 +426,19 @@ ALTER PUBLICATION supabase_realtime ADD TABLE orders, order_items;`}</pre>
       {activeTab === 'passwords' && (
         <form onSubmit={handleSavePasswords} className="p-6 space-y-4 max-w-md">
           <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs text-slate-600">
-            Imposta credenziali di accesso separate per il personale di magazzino e l'ufficio.
+            Le credenziali sono gestite da Supabase Auth. Per sicurezza puoi modificare solo la password del ruolo con cui hai effettuato l'accesso.
           </div>
 
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1">
-              Nuovo PIN / Password Magazzino (Smartphone)
-            </label>
-            <input
-              type="text"
-              placeholder="Es. 1234"
-              value={magazzinoPin}
-              onChange={(e) => setMagazzinoPin(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">
-              Nuova Password Ufficio Amministrativo (Computer)
+              {currentRole === 'magazzino' ? 'Nuovo PIN / Password Magazzino' : 'Nuova Password Ufficio'}
             </label>
             <input
               type="password"
-              placeholder="Es. ufficio2026"
-              value={ufficioPass}
-              onChange={(e) => setUfficioPass(e.target.value)}
+              autoComplete="new-password"
+              placeholder="Inserisci la nuova credenziale"
+              value={currentRole === 'magazzino' ? magazzinoPin : ufficioPass}
+              onChange={(e) => currentRole === 'magazzino' ? setMagazzinoPin(e.target.value) : setUfficioPass(e.target.value)}
               className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
@@ -460,7 +452,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE orders, order_items;`}</pre>
 
           <button
             type="submit"
-            disabled={!magazzinoPin && !ufficioPass}
+            disabled={currentRole === 'magazzino' ? !magazzinoPin : !ufficioPass}
             className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition"
           >
             <Save className="w-4 h-4" />

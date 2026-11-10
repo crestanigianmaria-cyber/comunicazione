@@ -1,4 +1,4 @@
-import { CompanySettings, Order, OrderItem, OrderStatus, Product, ExcelImportRow } from '../types';
+import { CompanySettings, Order, OrderItem, OrderStatus, Product, ExcelImportRow, UserRole } from '../types';
 import { INITIAL_PRODUCTS } from '../data/initialCatalog';
 import { getSupabaseClient } from '../lib/supabase';
 import { playOrderNotificationChime } from '../lib/audio';
@@ -9,7 +9,6 @@ const STORAGE_KEY_ORDERS = 'magazzino_orders_v1';
 const STORAGE_KEY_ORDER_SEQ = 'magazzino_order_sequence_v1';
 const STORAGE_KEY_PENDING = 'magazzino_pending_orders_v1';
 const STORAGE_KEY_SETTINGS = 'magazzino_company_settings_v1';
-const STORAGE_KEY_PASSWORDS = 'magazzino_role_passwords_v1';
 
 // Clear legacy bloated localStorage products entry to eliminate quota errors
 try {
@@ -185,62 +184,97 @@ function saveLocalPendingOrders(orders: Order[]): void {
 // --------------------------------------------------------------------------
 
 export async function fetchProducts(forceRefresh = false): Promise<Product[]> {
-  if (!forceRefresh && cachedProducts !== null && cachedProducts.length > 0) {
+  if (!forceRefresh && cachedProducts !== null) {
     return cachedProducts;
   }
 
-  // 1. Fetch from Central Server (ensures all smartphones and PCs share exact same catalog)
+  // When Supabase is configured, it is the source of truth.
+  // Read in pages because Supabase commonly limits each response to 1,000 rows.
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const PAGE_SIZE = 1000;
+      const allProducts: Product[] = [];
+      let lastCode: string | null = null;
+      let expectedCount: number | null = null;
+
+      // Keyset pagination is more reliable than large numeric offsets on PostgREST.
+      // Product codes are unique, so each page starts strictly after the previous one.
+      for (;;) {
+        const response = lastCode
+          ? await supabase
+              .from('products')
+              .select('*', { count: 'exact' })
+              .gt('code', lastCode)
+              .order('code', { ascending: true })
+              .limit(PAGE_SIZE)
+          : await supabase
+              .from('products')
+              .select('*', { count: 'exact' })
+              .order('code', { ascending: true })
+              .limit(PAGE_SIZE);
+
+        const { data, error, count } = response;
+        if (error) throw error;
+        if (expectedCount === null && typeof count === 'number') {
+          expectedCount = count;
+        }
+
+        const page = (data || []) as Product[];
+        if (page.length === 0) break;
+
+        allProducts.push(...page);
+        lastCode = page[page.length - 1].code;
+
+        if (page.length < PAGE_SIZE) break;
+      }
+
+      if (expectedCount !== null && allProducts.length !== expectedCount) {
+        throw new Error(
+          `Catalogo incompleto: scaricati ${allProducts.length} articoli su ${expectedCount} presenti in Supabase.`
+        );
+      }
+
+      cachedProducts = allProducts;
+      await idbSaveAllProducts(allProducts);
+      return allProducts;
+    } catch (err) {
+      console.error('[Catalog] Supabase fetch failed:', err);
+      // Do not cache an empty fallback after a failed request: that would
+      // prevent a later retry and leave the warehouse search permanently empty.
+      const idbProducts = await idbGetAllProducts();
+      if (idbProducts && idbProducts.length > 0) {
+        cachedProducts = idbProducts;
+        return idbProducts;
+      }
+      cachedProducts = null;
+      return [];
+    }
+  }
+
+  // Legacy server API is used only when no Supabase project is configured.
   if (typeof window !== 'undefined') {
     try {
       const res = await fetch('/api/products');
       if (res.ok) {
         const data = await res.json();
-        if (data.success && Array.isArray(data.products) && data.products.length > 0) {
+        if (data.success && Array.isArray(data.products)) {
           cachedProducts = data.products;
           await idbSaveAllProducts(data.products);
           return data.products;
         }
       }
     } catch {
-      // Central server request failed, fallback to Supabase or IndexedDB
+      // Continue with local cache.
     }
   }
 
-  // 2. Fallback to Supabase if configured
-  const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase
-        .from('products')
-        .select('*')
-        .order('code', { ascending: true });
-
-      if (!error && data && data.length > 0) {
-        cachedProducts = data;
-        await idbSaveAllProducts(data);
-        // Sync to central server in background
-        if (typeof window !== 'undefined') {
-          fetch('/api/products/bulk', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ products: data }),
-          }).catch(() => {});
-        }
-        return data;
-      }
-    } catch (err) {
-      console.warn('Supabase fetch products error, using local catalog:', err);
-    }
-  }
-
-  // 3. Load from IndexedDB (local cache on device)
   const idbProducts = await idbGetAllProducts();
   if (idbProducts && idbProducts.length > 0) {
     cachedProducts = idbProducts;
     return idbProducts;
   }
 
-  // 4. First time launch fallback
   cachedProducts = INITIAL_PRODUCTS;
   await idbSaveAllProducts(INITIAL_PRODUCTS);
   return INITIAL_PRODUCTS;
@@ -249,92 +283,84 @@ export async function fetchProducts(forceRefresh = false): Promise<Product[]> {
 export async function importExcelProductsToDb(
   parsedRows: ExcelImportRow[]
 ): Promise<{ added: number; updated: number; total: number }> {
-  // Ensure we have current catalog loaded
-  const currentProducts = await fetchProducts();
+  // Refresh from the authoritative source before calculating additions/updates.
+  const currentProducts = await fetchProducts(true);
   const productMap = new Map<string, Product>();
-
-  for (const p of currentProducts) {
-    productMap.set(p.code, p);
-  }
+  for (const product of currentProducts) productMap.set(product.code, product);
 
   let added = 0;
   let updated = 0;
   const now = new Date().toISOString();
-
-  const toUpsertSupabase: Partial<Product>[] = [];
+  const rowsToSave: Array<{
+    code: string;
+    description: string;
+    unit_of_measure: string;
+    alternative_code: string | null;
+    updated_at: string;
+  }> = [];
 
   for (const row of parsedRows) {
-    if (!row.code || !row.description) continue;
+    if (!row.code || !row.description || !row.unit_of_measure) continue;
 
     const existing = productMap.get(row.code);
     if (existing) {
-      // Update description, UM (if provided), alternative_code
-      const updatedItem: Product = {
-        ...existing,
-        description: row.description,
-        unit_of_measure: row.unit_of_measure || existing.unit_of_measure,
-        alternative_code: row.alternative_code !== null ? row.alternative_code : existing.alternative_code,
-        updated_at: now,
-      };
-      productMap.set(row.code, updatedItem);
-      toUpsertSupabase.push(updatedItem);
       updated++;
     } else {
-      const newItem: Product = {
-        id: 'prod-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
-        code: row.code,
-        description: row.description,
-        unit_of_measure: row.unit_of_measure || 'PZ',
-        alternative_code: row.alternative_code || null,
-        created_at: now,
-        updated_at: now,
-      };
-      productMap.set(row.code, newItem);
-      toUpsertSupabase.push(newItem);
       added++;
     }
+
+    rowsToSave.push({
+      code: row.code,
+      description: row.description,
+      unit_of_measure: row.unit_of_measure,
+      alternative_code: row.alternative_code || null,
+      updated_at: now,
+    });
+  }
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    // Do not claim success unless every batch has been accepted by Supabase.
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < rowsToSave.length; i += BATCH_SIZE) {
+      const batch = rowsToSave.slice(i, i + BATCH_SIZE);
+      const { error } = await supabase
+        .from('products')
+        .upsert(batch, { onConflict: 'code' });
+      if (error) {
+        throw new Error(`Errore Supabase nel blocco ${Math.floor(i / BATCH_SIZE) + 1}: ${error.message}`);
+      }
+    }
+
+    // Reload from the database (paged) so local IDs match the UUIDs generated by PostgreSQL.
+    const savedProducts = await fetchProducts(true);
+    return { added, updated, total: savedProducts.length };
+  }
+
+  // Offline/local-only mode: keep a local catalog, but never send fake string IDs to UUID columns.
+  const nowLocal = new Date().toISOString();
+  for (const row of rowsToSave) {
+    const existing = productMap.get(row.code);
+    productMap.set(row.code, {
+      id: existing?.id || (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : 'local-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)),
+      code: row.code,
+      description: row.description,
+      unit_of_measure: row.unit_of_measure,
+      alternative_code: row.alternative_code,
+      created_at: existing?.created_at || nowLocal,
+      updated_at: nowLocal,
+    });
   }
 
   const newCatalog = Array.from(productMap.values()).sort((a, b) =>
     a.code.localeCompare(b.code, undefined, { numeric: true })
   );
-
-  // 1. Save to local IndexedDB (unlimited quota, offline instant search)
   cachedProducts = newCatalog;
   await idbSaveAllProducts(newCatalog);
-
-  // 2. Save centrally on Server to broadcast to all smartphones and computers
-  if (typeof window !== 'undefined') {
-    try {
-      await fetch('/api/products/bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ products: newCatalog }),
-      });
-    } catch (err) {
-      console.warn('Central server catalog save notice:', err);
-    }
-  }
-
-  // 3. Notify local listeners and same-browser tabs
   catalogListeners.forEach(listener => listener(newCatalog));
-  if (broadcastChannel) {
-    broadcastChannel.postMessage({ type: 'CATALOG_UPDATED' });
-  }
-
-  // 4. Sync to Supabase in batches of 250 in background if configured
-  const supabase = getSupabaseClient();
-  if (supabase && toUpsertSupabase.length > 0) {
-    try {
-      const BATCH_SIZE = 250;
-      for (let i = 0; i < toUpsertSupabase.length; i += BATCH_SIZE) {
-        const batch = toUpsertSupabase.slice(i, i + BATCH_SIZE);
-        await supabase.from('products').upsert(batch, { onConflict: 'code' });
-      }
-    } catch (err) {
-      console.warn('Background Supabase upsert error:', err);
-    }
-  }
+  if (broadcastChannel) broadcastChannel.postMessage({ type: 'CATALOG_UPDATED' });
 
   return { added, updated, total: newCatalog.length };
 }
@@ -364,23 +390,9 @@ export async function clearAllProducts(): Promise<void> {
 // --------------------------------------------------------------------------
 
 export async function fetchOrders(forceRefresh = false): Promise<Order[]> {
-  // 1. Fetch from Central Server
-  if (typeof window !== 'undefined') {
-    try {
-      const res = await fetch('/api/orders');
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.orders)) {
-          saveLocalOrders(data.orders);
-          return data.orders;
-        }
-      }
-    } catch {
-      // Fallback
-    }
-  }
-
-  // 2. Fetch from Supabase
+  // Supabase is the single source of truth. Do not read /api/orders:
+  // on Vercel that legacy endpoint may return an empty server-side list,
+  // which previously overwrote valid local orders and hid database orders.
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
@@ -389,15 +401,22 @@ export async function fetchOrders(forceRefresh = false): Promise<Order[]> {
         .select('*, items:order_items(*)')
         .order('created_at', { ascending: false });
 
-      if (!ordersErr && ordersData) {
-        saveLocalOrders(ordersData);
-        return ordersData;
+      if (ordersErr) {
+        console.error('[Orders] Supabase read failed; preserving local cache:', ordersErr);
+      } else if (ordersData) {
+        const normalizedOrders = ordersData.map((order: any) => ({
+          ...order,
+          items: Array.isArray(order.items) ? order.items : [],
+        })) as Order[];
+        saveLocalOrders(normalizedOrders);
+        return normalizedOrders;
       }
     } catch (err) {
-      console.warn('Supabase fetch orders error, fallback to local:', err);
+      console.error('[Orders] Unexpected Supabase read failure; preserving local cache:', err);
     }
   }
 
+  // Only use local storage as a fallback when Supabase is unavailable or failed.
   if (cachedOrders === null || forceRefresh) {
     const idbOrders = await idbGetAllOrders();
     if (idbOrders && idbOrders.length > 0) {
@@ -421,12 +440,13 @@ export async function createNewOrder(orderInput: {
     throw new Error('Impossibile inviare un ordine senza articoli.');
   }
 
-  const orderId = 'ord-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
+  // Supabase schema uses UUID primary keys for orders and order_items.
+  const orderId = crypto.randomUUID();
   const now = new Date().toISOString();
   const orderNumber = getNextOrderNumber();
 
   const formattedItems: OrderItem[] = orderInput.items.map((item, index) => ({
-    id: `${orderId}-item-${index + 1}`,
+    id: crypto.randomUUID(),
     order_id: orderId,
     product_id: item.product.id,
     product_code_snapshot: item.product.code,
@@ -481,7 +501,8 @@ export async function createNewOrder(orderInput: {
         .from('orders')
         .insert({
           id: newOrder.id,
-          order_number: newOrder.order_number,
+          // The database trigger assigns a globally unique order number.
+          order_number: '',
           customer_reference: newOrder.customer_reference,
           status: newOrder.status,
           created_at: newOrder.created_at,
@@ -494,6 +515,11 @@ export async function createNewOrder(orderInput: {
         console.warn('Supabase order insert error, queuing for retry:', orderErr);
         queuePendingOrder(newOrder);
       } else {
+        // Use the authoritative order number generated by the Supabase trigger.
+        newOrder.order_number = dbOrder.order_number;
+        const refreshedLocalOrders = getLocalOrders().map(order => order.id === newOrder.id ? newOrder : order);
+        saveLocalOrders(refreshedLocalOrders);
+
         // Insert order items
         const dbItems = formattedItems.map(it => ({
           id: it.id,
@@ -509,7 +535,8 @@ export async function createNewOrder(orderInput: {
 
         const { error: itemsErr } = await supabase.from('order_items').insert(dbItems);
         if (itemsErr) {
-          console.warn('Supabase items insert error:', itemsErr);
+          console.warn('Supabase items insert error, queuing order for retry:', itemsErr);
+          queuePendingOrder(newOrder);
         }
       }
     } catch (err) {
@@ -603,6 +630,8 @@ export async function syncPendingOrders(): Promise<{ synced: number; remaining: 
 
   for (const order of pending) {
     try {
+      // Retry with INSERT ... ON CONFLICT DO NOTHING. This is deliberately
+      // idempotent and does not require UPDATE policies for warehouse users.
       const { error: ordErr } = await supabase.from('orders').upsert({
         id: order.id,
         order_number: order.order_number,
@@ -610,9 +639,10 @@ export async function syncPendingOrders(): Promise<{ synced: number; remaining: 
         status: order.status,
         created_at: order.created_at,
         updated_at: order.updated_at,
-      });
+      }, { onConflict: 'id', ignoreDuplicates: true });
 
       if (ordErr) {
+        console.warn('[Order sync] Failed to save order:', order.id, ordErr);
         stillPending.push(order);
         continue;
       }
@@ -629,7 +659,16 @@ export async function syncPendingOrders(): Promise<{ synced: number; remaining: 
         created_at: order.created_at,
       }));
 
-      await supabase.from('order_items').upsert(dbItems);
+      const { error: itemsErr } = await supabase
+        .from('order_items')
+        .upsert(dbItems, { onConflict: 'id', ignoreDuplicates: true });
+
+      if (itemsErr) {
+        console.warn('[Order sync] Failed to save order items:', order.id, itemsErr);
+        stillPending.push(order);
+        continue;
+      }
+
       synced++;
     } catch {
       stillPending.push(order);
@@ -659,15 +698,28 @@ export function subscribeToOrders(callback: OrderListener): () => void {
           'postgres_changes',
           { event: '*', schema: 'public', table: 'orders' },
           async (payload) => {
-            console.log('Supabase Realtime orders update received:', payload);
-            const freshOrders = await fetchOrders();
+            console.log('[Realtime] Orders change received:', payload);
+            const freshOrders = await fetchOrders(true);
             callback(freshOrders);
             if (payload.eventType === 'INSERT') {
               playOrderNotificationChime();
             }
           }
         )
-        .subscribe();
+        // Order headers and their items are inserted in two requests. Listen
+        // to item changes too, so the office refreshes after the items arrive.
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'order_items' },
+          async (payload) => {
+            console.log('[Realtime] Order items change received:', payload);
+            const freshOrders = await fetchOrders(true);
+            callback(freshOrders);
+          }
+        )
+        .subscribe((status, err) => {
+          console.log('[Realtime] Orders channel status:', status, err || '');
+        });
     } catch (err) {
       console.warn('Failed to subscribe to Supabase Realtime channel:', err);
     }
@@ -710,24 +762,91 @@ export function saveCompanySettings(settings: CompanySettings): void {
   }
 }
 
-export function verifyRoleLogin(role: 'magazzino' | 'ufficio', inputSecret: string): boolean {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_PASSWORDS);
-    const passwords = raw ? JSON.parse(raw) : DEFAULT_PASSWORDS;
-    const required = passwords[role] || DEFAULT_PASSWORDS[role];
-    return inputSecret.trim() === required;
-  } catch {
-    return inputSecret.trim() === DEFAULT_PASSWORDS[role];
+export async function signInRole(role: UserRole, inputSecret: string): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Connessione a Supabase non configurata.');
+
+  const email = role === 'magazzino' ? 'magazzino@saggin.local' : 'ufficio@saggin.local';
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password: inputSecret.trim(),
+  });
+
+  if (error || !data.user) {
+    throw new Error('PIN / password non corretti.');
+  }
+
+  const { data: roleRecord, error: roleError } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', data.user.id)
+    .maybeSingle();
+
+  if (roleError) {
+    await supabase.auth.signOut();
+    console.error('[Auth] Errore durante la lettura di user_roles:', roleError);
+    throw new Error(`Accesso riuscito, ma impossibile verificare il ruolo: ${roleError.message}`);
+  }
+
+  if (!roleRecord) {
+    await supabase.auth.signOut();
+    console.error('[Auth] Nessun record user_roles trovato per:', data.user.id);
+    throw new Error('Accesso riuscito, ma non esiste un ruolo associato a questo account.');
+  }
+
+  if (roleRecord.role !== role) {
+    await supabase.auth.signOut();
+    console.error('[Auth] Ruolo non corrispondente:', { expected: role, actual: roleRecord.role, userId: data.user.id });
+    throw new Error(`Ruolo non corrispondente: selezionato "${role}", account associato a "${roleRecord.role}".`);
   }
 }
 
-export function changeRolePassword(role: 'magazzino' | 'ufficio', newPass: string): void {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_PASSWORDS);
-    const passwords = raw ? JSON.parse(raw) : { ...DEFAULT_PASSWORDS };
-    passwords[role] = newPass.trim();
-    localStorage.setItem(STORAGE_KEY_PASSWORDS, JSON.stringify(passwords));
-  } catch (err) {
-    console.error('Error changing password:', err);
+export async function getAuthenticatedRole(): Promise<UserRole | null> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData.user) return null;
+
+  const { data: roleRecord, error: roleError } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', userData.user.id)
+    .maybeSingle();
+
+  if (roleError || (roleRecord?.role !== 'magazzino' && roleRecord?.role !== 'ufficio')) {
+    await supabase.auth.signOut();
+    return null;
   }
+
+  return roleRecord.role as UserRole;
+}
+
+export async function signOutRole(): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
+}
+
+export async function changeRolePassword(role: UserRole, newPass: string): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Connessione a Supabase non configurata.');
+  if (!newPass.trim()) throw new Error('Inserisci una nuova password.');
+
+  const { data: userData, error: userError } = await supabase.auth.getUser();
+  if (userError || !userData.user) throw new Error('Sessione scaduta. Accedi nuovamente.');
+
+  const { data: roleRecord, error: roleError } = await supabase
+    .from('user_roles')
+    .select('role')
+    .eq('user_id', userData.user.id)
+    .maybeSingle();
+
+  if (roleError || roleRecord?.role !== role) {
+    throw new Error('Puoi modificare solo le credenziali del ruolo attualmente autenticato.');
+  }
+
+  const { error } = await supabase.auth.updateUser({ password: newPass.trim() });
+  if (error) throw new Error(error.message);
 }

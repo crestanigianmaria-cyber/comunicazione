@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Smartphone, Building2, Lock, ArrowRight, ShieldCheck, KeyRound } from 'lucide-react';
 import { UserRole } from '../../types';
-import { verifyRoleLogin } from '../../services/db';
+import { signInRole } from '../../services/db';
 
 interface LoginModalProps {
   onLoginSuccess: (role: UserRole) => void;
@@ -14,24 +14,19 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setIsLoading(true);
 
-    setTimeout(() => {
-      const isValid = verifyRoleLogin(selectedRole, password);
-      if (isValid) {
-        onLoginSuccess(selectedRole);
-      } else {
-        setError(
-          selectedRole === 'magazzino'
-            ? 'PIN / Password Magazzino errata. (Predefinita: 1234)'
-            : 'Password Ufficio errata. (Predefinita: ufficio2026)'
-        );
-      }
+    try {
+      await signInRole(selectedRole, password);
+      onLoginSuccess(selectedRole);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Accesso non riuscito. Riprova.');
+    } finally {
       setIsLoading(false);
-    }, 250);
+    }
   };
 
   const handleRoleSelect = (role: UserRole) => {
@@ -40,10 +35,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
     setError(null);
   };
 
-  const fillDefaultCredentials = () => {
-    setPassword(selectedRole === 'magazzino' ? '1234' : 'ufficio2026');
-    setError(null);
-  };
+
 
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col justify-center items-center px-4 py-8 select-none">
@@ -111,13 +103,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
                 <label className="text-xs font-bold text-slate-700">
                   {selectedRole === 'magazzino' ? 'PIN / Password Magazzino' : 'Password Amministrativa Ufficio'}
                 </label>
-                <button
-                  type="button"
-                  onClick={fillDefaultCredentials}
-                  className="text-[11px] font-semibold text-blue-600 hover:text-blue-700"
-                >
-                  Usa predefinita ({selectedRole === 'magazzino' ? '1234' : 'ufficio2026'})
-                </button>
+
               </div>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
@@ -128,7 +114,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
                   inputMode={selectedRole === 'magazzino' ? 'numeric' : 'text'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={selectedRole === 'magazzino' ? 'Inserisci PIN (es. 1234)' : 'Inserisci password ufficio'}
+                  placeholder={selectedRole === 'magazzino' ? 'Inserisci PIN Magazzino' : 'Inserisci password ufficio'}
                   required
                   autoFocus
                   className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
