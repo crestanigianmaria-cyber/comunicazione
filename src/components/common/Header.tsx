@@ -196,6 +196,18 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
       </div>
+      {currentRole === 'magazzino' && (
+        <div className="md:hidden max-w-7xl mx-auto px-4 pb-2 flex gap-2">
+          <button
+            onClick={() => onNavigate('magazzino')}
+            className={`flex-1 py-2 rounded-lg text-xs font-bold ${activeView === 'magazzino' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'}`}
+          >Nuovo ordine</button>
+          <button
+            onClick={() => onNavigate('magazzino_storico')}
+            className={`flex-1 py-2 rounded-lg text-xs font-bold ${activeView === 'magazzino_storico' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'}`}
+          >Storico ordini</button>
+        </div>
+      )}
     </header>
   );
 };
