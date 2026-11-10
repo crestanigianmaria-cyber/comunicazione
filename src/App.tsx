@@ -46,6 +46,7 @@ export default function App() {
 
   // Database state
   const [products, setProducts] = useState<Product[]>([]);
+  const [isProductsLoading, setIsProductsLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings>(() => getCompanySettings());
 
@@ -64,18 +65,27 @@ export default function App() {
     let isMounted = true;
 
     async function loadData() {
-      try {
-        const [loadedProducts, loadedOrders] = await Promise.all([
-          fetchProducts(),
-          fetchOrders(),
-        ]);
-        if (isMounted) {
-          setProducts(loadedProducts);
-          setOrders(loadedOrders);
-        }
-      } catch (err) {
-        console.error('Error loading initial data:', err);
-      }
+      setIsProductsLoading(true);
+      const productsTask = fetchProducts()
+        .then((loadedProducts) => {
+          if (isMounted) setProducts(loadedProducts);
+        })
+        .catch((err) => {
+          console.error('[Catalog] Initial load failed:', err);
+        })
+        .finally(() => {
+          if (isMounted) setIsProductsLoading(false);
+        });
+
+      const ordersTask = fetchOrders()
+        .then((loadedOrders) => {
+          if (isMounted) setOrders(loadedOrders);
+        })
+        .catch((err) => {
+          console.error('[Orders] Initial load failed:', err);
+        });
+
+      await Promise.all([productsTask, ordersTask]);
     }
 
     loadData();
@@ -171,6 +181,7 @@ export default function App() {
         {activeView === 'magazzino' && (
           <WarehouseView
             products={products}
+            isProductsLoading={isProductsLoading}
             companySettings={companySettings}
             isOnline={isOnline}
             onOpenExcelModal={() => setShowExcelModal(true)}
