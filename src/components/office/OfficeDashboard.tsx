@@ -17,7 +17,7 @@ import {
   Trash2,
   ArchiveRestore
 } from 'lucide-react';
-import { Order, OrderStatus, CompanySettings, Product } from '../../types';
+import { Order, OrderStatus, CompanySettings, Product, ORDER_DOCUMENT_LABELS } from '../../types';
 import { OrderDetailModal } from './OrderDetailModal';
 import { OrderPrintView } from './OrderPrintView';
 import { updateOrderStatus } from '../../services/db';
@@ -364,6 +364,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                 <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
                   <th className="py-3 px-4 w-36">Numero Ordine</th>
                   <th className="py-3 px-4">Cliente / Riferimento</th>
+                  <th className="py-3 px-4 w-36">Documento</th>
                   <th className="py-3 px-4 w-28">Data</th>
                   <th className="py-3 px-4 w-24">Ora</th>
                   <th className="py-3 px-4 w-28 text-center">Articoli</th>
@@ -409,6 +410,13 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                             Carico diretto al banco
                           </span>
                         )}
+                      </td>
+
+                      {/* Document Type */}
+                      <td className="py-3.5 px-4">
+                        <span className="inline-flex items-center rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-slate-700">
+                          {order.document_type ? ORDER_DOCUMENT_LABELS[order.document_type] : 'DDT'}
+                        </span>
                       </td>
 
                       {/* Date */}
