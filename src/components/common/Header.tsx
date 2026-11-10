@@ -6,8 +6,8 @@ import { isSoundEnabled, setSoundEnabled } from '../../lib/audio';
 
 interface HeaderProps {
   currentRole: UserRole | null;
-  activeView: 'magazzino' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_catalogo' | 'ufficio_impostazioni';
-  onNavigate: (view: 'magazzino' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_catalogo' | 'ufficio_impostazioni') => void;
+  activeView: 'magazzino' | 'magazzino_storico' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_cestino' | 'ufficio_catalogo' | 'ufficio_impostazioni';
+  onNavigate: (view: 'magazzino' | 'magazzino_storico' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_cestino' | 'ufficio_catalogo' | 'ufficio_impostazioni') => void;
   onLogout: () => void;
   onSwitchRole: () => void;
   companySettings: CompanySettings;
@@ -74,6 +74,14 @@ export const Header: React.FC<HeaderProps> = ({
                 Storico Completo
               </button>
               <button
+                onClick={() => onNavigate('ufficio_cestino')}
+                className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
+                  activeView === 'ufficio_cestino' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                Cestino
+              </button>
+              <button
                 onClick={() => onNavigate('ufficio_catalogo')}
                 className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
                   activeView === 'ufficio_catalogo'
@@ -97,9 +105,16 @@ export const Header: React.FC<HeaderProps> = ({
           )}
 
           {currentRole === 'magazzino' && (
-            <span className="text-xs text-slate-400 font-medium whitespace-nowrap">
-              Interfaccia Operatore Magazzino
-            </span>
+            <>
+              <button
+                onClick={() => onNavigate('magazzino')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap ${activeView === 'magazzino' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'}`}
+              >Ordine</button>
+              <button
+                onClick={() => onNavigate('magazzino_storico')}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap ${activeView === 'magazzino_storico' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'}`}
+              >Storico ordini</button>
+            </>
           )}
         </nav>
 
