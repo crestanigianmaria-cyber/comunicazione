@@ -119,25 +119,22 @@ export const OrderPrintView: React.FC<OrderPrintViewProps> = ({
             </thead>
             <tbody className="divide-y divide-slate-200 text-xs">
               {order.items.map((item, index) => (
-                <tr key={item.id} className="hover:bg-slate-50/50">
-                  <td className="py-3 px-3 text-center text-slate-400 font-mono">
-                    {index + 1}
-                  </td>
-                  <td className="py-3 px-3 font-mono font-bold text-slate-900">
-                    {item.product_code_snapshot}
-                  </td>
-                  <td className="py-3 px-3 font-medium text-slate-900">
-                    {item.product_description_snapshot}
-                  </td>
-                  <td className="py-3 px-3 font-mono text-slate-500">
-                    {item.alternative_code_snapshot || '—'}
-                  </td>
-                  <td className="py-3 px-3 text-center font-bold text-slate-700">
-                    {item.unit_of_measure_snapshot}
-                  </td>
-                  <td className="py-3 px-3 text-right font-mono font-bold text-slate-900 text-sm">
-                    {item.quantity}
-                  </td>
+                <tr key={item.id} className={item.line_type === 'DESCRIPTION' ? 'bg-amber-50 print:bg-transparent' : 'hover:bg-slate-50/50'}>
+                  {item.line_type === 'DESCRIPTION' ? (
+                    <td colSpan={6} className="py-3 px-3 text-sm font-medium text-slate-800 whitespace-pre-wrap">
+                      <span className="mr-2 text-[9px] font-black uppercase tracking-wider text-slate-500">Nota</span>
+                      {item.manual_description || item.product_description_snapshot}
+                    </td>
+                  ) : (
+                    <>
+                      <td className="py-3 px-3 text-center text-slate-400 font-mono">{index + 1}</td>
+                      <td className="py-3 px-3 font-mono font-bold text-slate-900">{item.product_code_snapshot}</td>
+                      <td className="py-3 px-3 font-medium text-slate-900">{item.product_description_snapshot}</td>
+                      <td className="py-3 px-3 font-mono text-slate-500">{item.alternative_code_snapshot || '—'}</td>
+                      <td className="py-3 px-3 text-center font-bold text-slate-700">{item.unit_of_measure_snapshot}</td>
+                      <td className="py-3 px-3 text-right font-mono font-bold text-slate-900 text-sm">{item.quantity}</td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -147,7 +144,7 @@ export const OrderPrintView: React.FC<OrderPrintViewProps> = ({
                   Totale Righe Caricate:
                 </td>
                 <td className="py-3 px-3 text-right font-mono text-slate-900">
-                  {order.items.length} articoli
+                  {order.items.filter(item => item.line_type !== 'DESCRIPTION').length} articoli
                 </td>
               </tr>
             </tfoot>

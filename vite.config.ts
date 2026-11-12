@@ -11,14 +11,14 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg'],
+        includeAssets: ['favicon.png', 'apple-touch-icon.png', 'icon.svg', 'saggin-logo.png', 'logoiphone.png'],
         manifest: {
           id: '/',
           name: 'Saggin - Magazzino Edile',
           short_name: 'Saggin',
           description: 'Sistema di trasmissione ordini carico cantiere Saggin Guglielmo Materiali Edili.',
-          theme_color: '#0f172a',
-          background_color: '#f8fafc',
+          theme_color: '#ffffff',
+          background_color: '#ffffff',
           display: 'standalone',
           start_url: '/',
           scope: '/',

@@ -161,7 +161,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
         <div className="p-4 sm:p-5 overflow-y-auto flex-1">
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-              Materiali Caricati ({currentOrder.items.length} articoli)
+              Righe dell'ordine ({currentOrder.items.length})
             </h4>
             <span className="text-[11px] text-slate-500">
               Dati registrati come snapshot all'invio dell'ordine
@@ -182,27 +182,24 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {currentOrder.items.map((item, index) => (
-                  <tr key={item.id} className="hover:bg-slate-50/80 transition">
-                    <td className="py-3 px-3 text-center text-slate-400 font-mono">
-                      {index + 1}
-                    </td>
-                    <td className="py-3 px-3">
-                      <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
-                        {item.product_code_snapshot}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3 font-semibold text-slate-900">
-                      {item.product_description_snapshot}
-                    </td>
-                    <td className="py-3 px-3 font-mono text-slate-500">
-                      {item.alternative_code_snapshot || '—'}
-                    </td>
-                    <td className="py-3 px-3 text-center font-bold text-blue-700 uppercase">
-                      {item.unit_of_measure_snapshot}
-                    </td>
-                    <td className="py-3 px-3 text-right font-mono font-black text-sm text-slate-900">
-                      {item.quantity}
-                    </td>
+                  <tr key={item.id} className={item.line_type === 'DESCRIPTION' ? 'bg-amber-50' : 'hover:bg-slate-50/80 transition'}>
+                    {item.line_type === 'DESCRIPTION' ? (
+                      <td colSpan={6} className="py-3 px-4 text-sm font-medium text-slate-800 whitespace-pre-wrap">
+                        <span className="mr-2 inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-800">Nota</span>
+                        {item.manual_description || item.product_description_snapshot}
+                      </td>
+                    ) : (
+                      <>
+                        <td className="py-3 px-3 text-center text-slate-400 font-mono">{index + 1}</td>
+                        <td className="py-3 px-3">
+                          <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{item.product_code_snapshot}</span>
+                        </td>
+                        <td className="py-3 px-3 font-semibold text-slate-900">{item.product_description_snapshot}</td>
+                        <td className="py-3 px-3 font-mono text-slate-500">{item.alternative_code_snapshot || '—'}</td>
+                        <td className="py-3 px-3 text-center font-bold text-blue-700 uppercase">{item.unit_of_measure_snapshot}</td>
+                        <td className="py-3 px-3 text-right font-mono font-black text-sm text-slate-900">{item.quantity}</td>
+                      </>
+                    )}
                   </tr>
                 ))}
               </tbody>

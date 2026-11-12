@@ -24,7 +24,9 @@ export interface Product {
 export interface OrderItem {
   id: string;
   order_id: string;
-  product_id: string;
+  product_id: string | null;
+  line_type?: 'PRODUCT' | 'DESCRIPTION';
+  manual_description?: string | null;
   product_code_snapshot: string;
   product_description_snapshot: string;
   unit_of_measure_snapshot: string;

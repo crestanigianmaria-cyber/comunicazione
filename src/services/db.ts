@@ -188,53 +188,73 @@ export async function fetchProducts(forceRefresh = false): Promise<Product[]> {
     return cachedProducts;
   }
 
+  // Serve the previously downloaded catalog immediately on repeat visits.
+  // Refresh Supabase in the background and notify subscribers when it finishes.
+  if (!forceRefresh && cachedProducts === null) {
+    const localProducts = await idbGetAllProducts();
+    if (localProducts.length > 0) {
+      cachedProducts = localProducts;
+      if (getSupabaseClient()) {
+        void fetchProducts(true)
+          .then(freshProducts => {
+            if (freshProducts.length > 0) {
+              catalogListeners.forEach(listener => listener(freshProducts));
+            }
+          })
+          .catch(err => console.warn('[Catalog] Background refresh failed:', err));
+      }
+      return localProducts;
+    }
+  }
+
   // When Supabase is configured, it is the source of truth.
   // Read in pages because Supabase commonly limits each response to 1,000 rows.
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
       const PAGE_SIZE = 1000;
-      const allProducts: Product[] = [];
-      let lastCode: string | null = null;
-      let expectedCount: number | null = null;
+      const PAGE_CONCURRENCY = 8;
+      const firstPage = await supabase
+        .from('products')
+        .select('*', { count: 'exact' })
+        .order('code', { ascending: true })
+        .range(0, PAGE_SIZE - 1);
 
-      // Keyset pagination is more reliable than large numeric offsets on PostgREST.
-      // Product codes are unique, so each page starts strictly after the previous one.
-      for (;;) {
-        const response = lastCode
-          ? await supabase
-              .from('products')
-              .select('*', { count: 'exact' })
-              .gt('code', lastCode)
-              .order('code', { ascending: true })
-              .limit(PAGE_SIZE)
-          : await supabase
-              .from('products')
-              .select('*', { count: 'exact' })
-              .order('code', { ascending: true })
-              .limit(PAGE_SIZE);
+      if (firstPage.error) throw firstPage.error;
 
-        const { data, error, count } = response;
-        if (error) throw error;
-        if (expectedCount === null && typeof count === 'number') {
-          expectedCount = count;
+      const allProducts: Product[] = (firstPage.data || []) as Product[];
+      const expectedCount = firstPage.count;
+
+      if (typeof expectedCount === 'number' && allProducts.length < expectedCount) {
+        const offsets: number[] = [];
+        for (let offset = PAGE_SIZE; offset < expectedCount; offset += PAGE_SIZE) {
+          offsets.push(offset);
         }
 
-        const page = (data || []) as Product[];
-        if (page.length === 0) break;
+        // Fetch catalog pages in small parallel batches instead of 100+
+        // sequential network round trips. Stable code ordering keeps pages deterministic.
+        for (let i = 0; i < offsets.length; i += PAGE_CONCURRENCY) {
+          const batchOffsets = offsets.slice(i, i + PAGE_CONCURRENCY);
+          const pages = await Promise.all(batchOffsets.map(offset =>
+            supabase
+              .from('products')
+              .select('*')
+              .order('code', { ascending: true })
+              .range(offset, offset + PAGE_SIZE - 1)
+          ));
 
-        allProducts.push(...page);
-        lastCode = page[page.length - 1].code;
-
-        if (page.length < PAGE_SIZE) break;
+          for (const pageResponse of pages) {
+            if (pageResponse.error) throw pageResponse.error;
+            allProducts.push(...((pageResponse.data || []) as Product[]));
+          }
+        }
       }
 
-      if (expectedCount !== null && allProducts.length !== expectedCount) {
+      if (typeof expectedCount === 'number' && allProducts.length !== expectedCount) {
         throw new Error(
           `Catalogo incompleto: scaricati ${allProducts.length} articoli su ${expectedCount} presenti in Supabase.`
         );
       }
-
       cachedProducts = allProducts;
       await idbSaveAllProducts(allProducts);
       return allProducts;
@@ -433,8 +453,11 @@ export async function createNewOrder(orderInput: {
   customer_reference: string | null;
   document_type?: import('../types').OrderDocumentType;
   items: {
-    product: Product;
+    id: string;
+    product?: Product;
     quantity: number;
+    isDescription?: boolean;
+    description?: string;
   }[];
 }): Promise<Order> {
   if (!orderInput.items || orderInput.items.length === 0) {
@@ -446,16 +469,37 @@ export async function createNewOrder(orderInput: {
   const now = new Date().toISOString();
   const orderNumber = getNextOrderNumber();
 
-  const formattedItems: OrderItem[] = orderInput.items.map((item, index) => ({
-    id: crypto.randomUUID(),
-    order_id: orderId,
-    product_id: item.product.id,
-    product_code_snapshot: item.product.code,
-    product_description_snapshot: item.product.description,
-    unit_of_measure_snapshot: item.product.unit_of_measure,
-    alternative_code_snapshot: item.product.alternative_code || null,
-    quantity: Number(item.quantity) || 1,
-  }));
+  const formattedItems: OrderItem[] = orderInput.items.map(item => {
+    if (item.isDescription) {
+      const description = (item.description || '').trim();
+      if (!description) throw new Error('La riga descrittiva non può essere vuota.');
+      return {
+        id: crypto.randomUUID(),
+        order_id: orderId,
+        product_id: null,
+        line_type: 'DESCRIPTION' as const,
+        manual_description: description,
+        product_code_snapshot: '',
+        product_description_snapshot: description,
+        unit_of_measure_snapshot: '',
+        alternative_code_snapshot: null,
+        quantity: 0,
+      };
+    }
+    if (!item.product) throw new Error('Riga ordine non valida.');
+    return {
+      id: crypto.randomUUID(),
+      order_id: orderId,
+      product_id: item.product.id,
+      line_type: 'PRODUCT' as const,
+      manual_description: null,
+      product_code_snapshot: item.product.code,
+      product_description_snapshot: item.product.description,
+      unit_of_measure_snapshot: item.product.unit_of_measure,
+      alternative_code_snapshot: item.product.alternative_code || null,
+      quantity: Number(item.quantity) || 1,
+    };
+  });
 
   const newOrder: Order = {
     id: orderId,
@@ -528,6 +572,8 @@ export async function createNewOrder(orderInput: {
           id: it.id,
           order_id: dbOrder.id,
           product_id: it.product_id,
+          line_type: it.line_type ?? 'PRODUCT',
+          manual_description: it.manual_description ?? null,
           product_code_snapshot: it.product_code_snapshot,
           product_description_snapshot: it.product_description_snapshot,
           unit_of_measure_snapshot: it.unit_of_measure_snapshot,
@@ -693,6 +739,8 @@ export async function syncPendingOrders(): Promise<{ synced: number; remaining: 
         id: it.id,
         order_id: order.id,
         product_id: it.product_id,
+        line_type: it.line_type ?? 'PRODUCT',
+        manual_description: it.manual_description ?? null,
         product_code_snapshot: it.product_code_snapshot,
         product_description_snapshot: it.product_description_snapshot,
         unit_of_measure_snapshot: it.unit_of_measure_snapshot,
