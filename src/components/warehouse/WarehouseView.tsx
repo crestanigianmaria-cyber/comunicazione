@@ -144,6 +144,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
   const handleSaveQuantityPad = () => {
     if (!editingItem?.product) return;
+    const editingProductCode = editingItem.product.code;
     triggerHaptic();
     const sanitized = keypadValue.replace(',', '.').trim();
     const parsed = parseFloat(sanitized);
@@ -151,7 +152,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     if (!isNaN(parsed) && parsed > 0) {
       setCart(prevCart =>
         prevCart.map(item =>
-          item.product?.code === editingItem.product.code
+          item.product?.code === editingProductCode
             ? { ...item, quantity: Number(parsed.toFixed(3)) }
             : item
         )
@@ -161,9 +162,9 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   };
 
   // Remove item completely
-  const handleRemoveItem = (productCode: string) => {
+  const handleRemoveItem = (itemId: string) => {
     triggerHaptic();
-    setCart(prevCart => prevCart.filter(item => item.id !== productCode));
+    setCart(prevCart => prevCart.filter(item => item.id !== itemId));
   };
 
   const handleAddDescriptionLine = () => {
@@ -425,7 +426,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
             <div className="flex items-center gap-2">
               <Package className="w-4 h-4 text-slate-600" />
               <h2 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
-                Articoli Inseriti ({totalLines} {totalLines === 1 ? 'riga' : 'righe'})
+                Righe ordine ({totalLines})
               </h2>
             </div>
             <button
@@ -517,7 +518,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                   <div className="flex items-center gap-1.5 shrink-0">
                     {/* Stepper - (Touch hitbox 44px) */}
                     <button
-                      onClick={() => handleQuantityDelta(item.product.code, -1)}
+                      onClick={() => handleQuantityDelta(item.product!.code, -1)}
                       className="w-11 h-11 flex items-center justify-center rounded-xl bg-white border-2 border-slate-200 text-slate-700 hover:bg-slate-100 active:scale-90 transition font-black shadow-xs"
                       aria-label="Diminuisci quantità"
                     >
@@ -540,7 +541,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
                     {/* Stepper + (Touch hitbox 44px) */}
                     <button
-                      onClick={() => handleQuantityDelta(item.product.code, 1)}
+                      onClick={() => handleQuantityDelta(item.product!.code, 1)}
                       className="w-11 h-11 flex items-center justify-center rounded-xl bg-blue-600 text-white hover:bg-blue-700 active:scale-90 transition font-black shadow-sm shadow-blue-500/20"
                       aria-label="Aumenta quantità"
                     >
@@ -733,7 +734,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
               )}
 
               <div className="text-xs font-bold text-slate-700">
-                Riepilogo articoli caricati ({cart.length} righe):
+                Riepilogo ordine ({cart.length} righe):
               </div>
 
               <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden max-h-52 overflow-y-auto">
