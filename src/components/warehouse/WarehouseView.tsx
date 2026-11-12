@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useState, useMemo, useRef, useDeferredValue } from 'react';
 import {
   Search,
   Plus,
@@ -15,15 +15,19 @@ import {
   Calculator,
   Layers,
   Receipt,
-  FileText
+  FileText,
+  AlignLeft
 } from 'lucide-react';
 import { Product, CompanySettings, OrderDocumentType, ORDER_DOCUMENT_LABELS } from '../../types';
 import { searchProducts } from '../../lib/search';
 import { createNewOrder } from '../../services/db';
 
 interface CartItem {
-  product: Product;
+  id: string;
+  product?: Product;
   quantity: number;
+  isDescription?: boolean;
+  description?: string;
 }
 
 interface WarehouseViewProps {
@@ -43,7 +47,10 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   const [customerReference, setCustomerReference] = useState('');
   const [documentType, setDocumentType] = useState<OrderDocumentType | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const deferredSearchQuery = useDeferredValue(searchQuery);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [showDescriptionEditor, setShowDescriptionEditor] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [submittedOrderNumber, setSubmittedOrderNumber] = useState<string | null>(null);
@@ -57,9 +64,9 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
   // Filtered search results
   const searchResults = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    return searchProducts(products, searchQuery, 25);
-  }, [products, searchQuery]);
+    if (!deferredSearchQuery.trim()) return [];
+    return searchProducts(products, deferredSearchQuery, 25);
+  }, [products, deferredSearchQuery]);
 
   // Total lines and total units count
   const totalLines = cart.length;
@@ -83,7 +90,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     if (!documentType) return;
     triggerHaptic();
     setCart(prevCart => {
-      const existingIndex = prevCart.findIndex(item => item.product.code === product.code);
+      const existingIndex = prevCart.findIndex(item => item.product?.code === product.code);
       if (existingIndex > -1) {
         const updated = [...prevCart];
         updated[existingIndex] = {
@@ -92,7 +99,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
         };
         return updated;
       } else {
-        return [{ product, quantity: 1 }, ...prevCart];
+        return [{ id: product.code, product, quantity: 1 }, ...prevCart];
       }
     });
 
@@ -106,7 +113,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     setCart(prevCart => {
       return prevCart
         .map(item => {
-          if (item.product.code === productCode) {
+          if (item.product?.code === productCode) {
             const newQty = Number((item.quantity + delta).toFixed(3));
             return newQty > 0 ? { ...item, quantity: newQty } : null;
           }
@@ -136,7 +143,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   };
 
   const handleSaveQuantityPad = () => {
-    if (!editingItem) return;
+    if (!editingItem?.product) return;
     triggerHaptic();
     const sanitized = keypadValue.replace(',', '.').trim();
     const parsed = parseFloat(sanitized);
@@ -144,7 +151,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     if (!isNaN(parsed) && parsed > 0) {
       setCart(prevCart =>
         prevCart.map(item =>
-          item.product.code === editingItem.product.code
+          item.product?.code === editingItem.product.code
             ? { ...item, quantity: Number(parsed.toFixed(3)) }
             : item
         )
@@ -156,7 +163,19 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   // Remove item completely
   const handleRemoveItem = (productCode: string) => {
     triggerHaptic();
-    setCart(prevCart => prevCart.filter(item => item.product.code !== productCode));
+    setCart(prevCart => prevCart.filter(item => item.id !== productCode));
+  };
+
+  const handleAddDescriptionLine = () => {
+    const description = descriptionDraft.trim();
+    if (!description) return;
+    triggerHaptic();
+    setCart(prevCart => [
+      ...prevCart,
+      { id: `description-${crypto.randomUUID()}`, isDescription: true, description, quantity: 0 },
+    ]);
+    setDescriptionDraft('');
+    setShowDescriptionEditor(false);
   };
 
   // Order submission
@@ -409,6 +428,13 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                 Articoli Inseriti ({totalLines} {totalLines === 1 ? 'riga' : 'righe'})
               </h2>
             </div>
+            <button
+              type="button"
+              onClick={() => setShowDescriptionEditor(value => !value)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-2.5 py-2 text-[10px] font-bold text-blue-700 hover:bg-blue-100 active:scale-95 transition"
+            >
+              <AlignLeft className="w-3.5 h-3.5" /> Riga descrittiva
+            </button>
             {totalLines > 0 && (
               <button
                 onClick={() => setCart([])}
@@ -418,6 +444,28 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
               </button>
             )}
           </div>
+
+          {showDescriptionEditor && (
+            <div className="mb-3 rounded-xl border border-blue-200 bg-blue-50/60 p-3 space-y-2">
+              <label className="block text-[10px] font-black uppercase tracking-wider text-blue-800">Testo della riga descrittiva</label>
+              <textarea
+                value={descriptionDraft}
+                onChange={e => setDescriptionDraft(e.target.value)}
+                rows={2}
+                maxLength={500}
+                autoFocus
+                placeholder="Es. Materiale da consegnare nel cantiere lato nord..."
+                className="w-full resize-y rounded-lg border border-slate-200 bg-white p-3 text-sm text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15"
+              />
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] text-slate-500">{descriptionDraft.length}/500 caratteri</span>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => { setShowDescriptionEditor(false); setDescriptionDraft(''); }} className="rounded-lg px-3 py-2 text-xs font-bold text-slate-600 hover:bg-white">Annulla</button>
+                  <button type="button" onClick={handleAddDescriptionLine} disabled={!descriptionDraft.trim()} className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">Inserisci riga</button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {cart.length === 0 ? (
             <div className="py-12 flex flex-col items-center justify-center text-center text-slate-400">
@@ -431,9 +479,23 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
             <div className="space-y-3">
               {cart.map((item) => (
                 <div
-                  key={item.product.code}
-                  className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between gap-3 shadow-xs"
+                  key={item.id}
+                  className={`p-3 border rounded-2xl flex items-center justify-between gap-3 shadow-xs ${item.isDescription ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}
                 >
+                  {item.isDescription ? (
+                    <>
+                      <div className="min-w-0 flex-1">
+                        <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-800 mb-1">
+                          <AlignLeft className="w-3 h-3" /> Riga descrittiva
+                        </span>
+                        <p className="whitespace-pre-wrap break-words text-sm font-medium text-slate-800">{item.description}</p>
+                      </div>
+                      <button type="button" onClick={() => handleRemoveItem(item.id)} className="w-10 h-11 shrink-0 flex items-center justify-center rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50" title="Elimina riga">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </>
+                  ) : item.product ? (
+                  <>
                   {/* Left: Code, Description & Alternative Code */}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 mb-1">
@@ -487,13 +549,15 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
                     {/* Delete item button */}
                     <button
-                      onClick={() => handleRemoveItem(item.product.code)}
+                      onClick={() => handleRemoveItem(item.id)}
                       className="w-10 h-11 flex items-center justify-center rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition ml-0.5"
                       title="Elimina riga"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
+                  </>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -527,7 +591,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       </div>
 
       {/* Quick Mobile Quantity Keypad Modal */}
-      {editingItem && (
+      {editingItem?.product && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-3 sm:p-4">
           <div className="w-full max-w-sm bg-white rounded-3xl p-5 shadow-2xl border border-slate-200 animate-in slide-in-from-bottom-8 duration-200">
             <div className="flex items-start justify-between pb-3 border-b border-slate-100 mb-3">
@@ -674,16 +738,21 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
               <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden max-h-52 overflow-y-auto">
                 {cart.map(item => (
-                  <div key={item.product.code} className="p-2.5 flex items-center justify-between text-xs bg-white">
-                    <div className="min-w-0 flex-1 pr-2">
-                      <span className="font-mono font-bold text-[11px] text-blue-700 mr-2">
-                        {item.product.code}
-                      </span>
-                      <span className="text-slate-800 line-clamp-1">{item.product.description}</span>
-                    </div>
-                    <div className="font-mono font-black text-slate-900 whitespace-nowrap">
-                      {item.quantity} {item.product.unit_of_measure}
-                    </div>
+                  <div key={item.id} className="p-2.5 flex items-center justify-between gap-2 text-xs bg-white">
+                    {item.isDescription ? (
+                      <div className="min-w-0">
+                        <span className="mr-2 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-black uppercase text-amber-800">Nota</span>
+                        <span className="whitespace-pre-wrap break-words text-slate-800">{item.description}</span>
+                      </div>
+                    ) : item.product ? (
+                      <>
+                        <div className="min-w-0 flex-1 pr-2">
+                          <span className="font-mono font-bold text-[11px] text-blue-700 mr-2">{item.product.code}</span>
+                          <span className="text-slate-800">{item.product.description}</span>
+                        </div>
+                        <div className="font-mono font-black text-slate-900 whitespace-nowrap">{item.quantity} {item.product.unit_of_measure}</div>
+                      </>
+                    ) : null}
                   </div>
                 ))}
               </div>
