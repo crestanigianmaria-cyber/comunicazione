@@ -213,47 +213,48 @@ export async function fetchProducts(forceRefresh = false): Promise<Product[]> {
   if (supabase) {
     try {
       const PAGE_SIZE = 1000;
-      const allProducts: Product[] = [];
-      let lastCode: string | null = null;
-      let expectedCount: number | null = null;
+      const PAGE_CONCURRENCY = 8;
+      const firstPage = await supabase
+        .from('products')
+        .select('*', { count: 'exact' })
+        .order('code', { ascending: true })
+        .range(0, PAGE_SIZE - 1);
 
-      // Keyset pagination is more reliable than large numeric offsets on PostgREST.
-      // Product codes are unique, so each page starts strictly after the previous one.
-      for (;;) {
-        const response = lastCode
-          ? await supabase
-              .from('products')
-              .select('*', { count: 'exact' })
-              .gt('code', lastCode)
-              .order('code', { ascending: true })
-              .limit(PAGE_SIZE)
-          : await supabase
-              .from('products')
-              .select('*', { count: 'exact' })
-              .order('code', { ascending: true })
-              .limit(PAGE_SIZE);
+      if (firstPage.error) throw firstPage.error;
 
-        const { data, error, count } = response;
-        if (error) throw error;
-        if (expectedCount === null && typeof count === 'number') {
-          expectedCount = count;
+      const allProducts: Product[] = (firstPage.data || []) as Product[];
+      const expectedCount = firstPage.count;
+
+      if (typeof expectedCount === 'number' && allProducts.length < expectedCount) {
+        const offsets: number[] = [];
+        for (let offset = PAGE_SIZE; offset < expectedCount; offset += PAGE_SIZE) {
+          offsets.push(offset);
         }
 
-        const page = (data || []) as Product[];
-        if (page.length === 0) break;
+        // Fetch catalog pages in small parallel batches instead of 100+
+        // sequential network round trips. Stable code ordering keeps pages deterministic.
+        for (let i = 0; i < offsets.length; i += PAGE_CONCURRENCY) {
+          const batchOffsets = offsets.slice(i, i + PAGE_CONCURRENCY);
+          const pages = await Promise.all(batchOffsets.map(offset =>
+            supabase
+              .from('products')
+              .select('*')
+              .order('code', { ascending: true })
+              .range(offset, offset + PAGE_SIZE - 1)
+          ));
 
-        allProducts.push(...page);
-        lastCode = page[page.length - 1].code;
-
-        if (page.length < PAGE_SIZE) break;
+          for (const pageResponse of pages) {
+            if (pageResponse.error) throw pageResponse.error;
+            allProducts.push(...((pageResponse.data || []) as Product[]));
+          }
+        }
       }
 
-      if (expectedCount !== null && allProducts.length !== expectedCount) {
+      if (typeof expectedCount === 'number' && allProducts.length !== expectedCount) {
         throw new Error(
           `Catalogo incompleto: scaricati ${allProducts.length} articoli su ${expectedCount} presenti in Supabase.`
         );
       }
-
       cachedProducts = allProducts;
       await idbSaveAllProducts(allProducts);
       return allProducts;
