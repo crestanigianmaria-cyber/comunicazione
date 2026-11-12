@@ -188,6 +188,25 @@ export async function fetchProducts(forceRefresh = false): Promise<Product[]> {
     return cachedProducts;
   }
 
+  // Serve the previously downloaded catalog immediately on repeat visits.
+  // Refresh Supabase in the background and notify subscribers when it finishes.
+  if (!forceRefresh && cachedProducts === null) {
+    const localProducts = await idbGetAllProducts();
+    if (localProducts.length > 0) {
+      cachedProducts = localProducts;
+      if (getSupabaseClient()) {
+        void fetchProducts(true)
+          .then(freshProducts => {
+            if (freshProducts.length > 0) {
+              catalogListeners.forEach(listener => listener(freshProducts));
+            }
+          })
+          .catch(err => console.warn('[Catalog] Background refresh failed:', err));
+      }
+      return localProducts;
+    }
+  }
+
   // When Supabase is configured, it is the source of truth.
   // Read in pages because Supabase commonly limits each response to 1,000 rows.
   const supabase = getSupabaseClient();
