@@ -433,8 +433,11 @@ export async function createNewOrder(orderInput: {
   customer_reference: string | null;
   document_type?: import('../types').OrderDocumentType;
   items: {
-    product: Product;
+    id: string;
+    product?: Product;
     quantity: number;
+    isDescription?: boolean;
+    description?: string;
   }[];
 }): Promise<Order> {
   if (!orderInput.items || orderInput.items.length === 0) {
@@ -446,16 +449,37 @@ export async function createNewOrder(orderInput: {
   const now = new Date().toISOString();
   const orderNumber = getNextOrderNumber();
 
-  const formattedItems: OrderItem[] = orderInput.items.map((item, index) => ({
-    id: crypto.randomUUID(),
-    order_id: orderId,
-    product_id: item.product.id,
-    product_code_snapshot: item.product.code,
-    product_description_snapshot: item.product.description,
-    unit_of_measure_snapshot: item.product.unit_of_measure,
-    alternative_code_snapshot: item.product.alternative_code || null,
-    quantity: Number(item.quantity) || 1,
-  }));
+  const formattedItems: OrderItem[] = orderInput.items.map(item => {
+    if (item.isDescription) {
+      const description = (item.description || '').trim();
+      if (!description) throw new Error('La riga descrittiva non può essere vuota.');
+      return {
+        id: crypto.randomUUID(),
+        order_id: orderId,
+        product_id: null,
+        line_type: 'DESCRIPTION' as const,
+        manual_description: description,
+        product_code_snapshot: '',
+        product_description_snapshot: description,
+        unit_of_measure_snapshot: '',
+        alternative_code_snapshot: null,
+        quantity: 0,
+      };
+    }
+    if (!item.product) throw new Error('Riga ordine non valida.');
+    return {
+      id: crypto.randomUUID(),
+      order_id: orderId,
+      product_id: item.product.id,
+      line_type: 'PRODUCT' as const,
+      manual_description: null,
+      product_code_snapshot: item.product.code,
+      product_description_snapshot: item.product.description,
+      unit_of_measure_snapshot: item.product.unit_of_measure,
+      alternative_code_snapshot: item.product.alternative_code || null,
+      quantity: Number(item.quantity) || 1,
+    };
+  });
 
   const newOrder: Order = {
     id: orderId,
@@ -528,6 +552,8 @@ export async function createNewOrder(orderInput: {
           id: it.id,
           order_id: dbOrder.id,
           product_id: it.product_id,
+          line_type: it.line_type ?? 'PRODUCT',
+          manual_description: it.manual_description ?? null,
           product_code_snapshot: it.product_code_snapshot,
           product_description_snapshot: it.product_description_snapshot,
           unit_of_measure_snapshot: it.unit_of_measure_snapshot,
@@ -693,6 +719,8 @@ export async function syncPendingOrders(): Promise<{ synced: number; remaining: 
         id: it.id,
         order_id: order.id,
         product_id: it.product_id,
+        line_type: it.line_type ?? 'PRODUCT',
+        manual_description: it.manual_description ?? null,
         product_code_snapshot: it.product_code_snapshot,
         product_description_snapshot: it.product_description_snapshot,
         unit_of_measure_snapshot: it.unit_of_measure_snapshot,
