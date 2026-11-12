@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Smartphone, Building2, Lock, ArrowRight, ShieldCheck, KeyRound } from 'lucide-react';
+import { Smartphone, Building2, Lock, ArrowRight, KeyRound } from 'lucide-react';
 import { UserRole } from '../../types';
 import { signInRole } from '../../services/db';
 
@@ -42,10 +42,17 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
       <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
         {/* Header Banner */}
         <div className="bg-slate-950 p-6 text-white text-center border-b border-slate-800">
-          <div className="w-12 h-12 bg-blue-600 rounded-xl mx-auto flex items-center justify-center mb-3 shadow-lg shadow-blue-500/25">
-            <ShieldCheck className="w-6 h-6 text-white" />
+          <div className="w-28 h-16 bg-white rounded-xl mx-auto flex items-center justify-center mb-3 p-2 shadow-lg shadow-black/10">
+            <img
+              src="/saggin-logo.png"
+              alt="Logo Saggin"
+              className="w-full h-full object-contain"
+              width="112"
+              height="64"
+              fetchPriority="high"
+            />
           </div>
-          <h1 className="text-xl font-extrabold tracking-tight">Magazzino Edile WMS</h1>
+          <h1 className="text-xl font-extrabold tracking-tight">Gestione Magazzino</h1>
           <p className="text-xs text-slate-400 mt-1">
             Seleziona la tua postazione per accedere al sistema
           </p>

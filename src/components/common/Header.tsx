@@ -1,5 +1,5 @@
 import React from 'react';
-import { Package, Volume2, VolumeX, LogOut, ArrowRightLeft, Bell } from 'lucide-react';
+import { Volume2, VolumeX, LogOut, ArrowRightLeft, Bell } from 'lucide-react';
 import { UserRole, CompanySettings } from '../../types';
 import { PWAInstallButton } from './PWAInstallButton';
 import { isSoundEnabled, setSoundEnabled } from '../../lib/audio';
@@ -40,8 +40,15 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
         {/* Zone 1: Single Brand Wordmark */}
         <div className="flex items-center gap-2.5 shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
-            <Package className="w-4 h-4 stroke-[2.5]" />
+          <div className="h-9 w-[4.25rem] rounded-lg bg-white border border-white/80 shadow-sm flex items-center justify-center p-1 overflow-hidden">
+            <img
+              src="/saggin-logo.png"
+              alt="Logo Saggin"
+              className="h-full w-full object-contain"
+              width="68"
+              height="38"
+              decoding="async"
+            />
           </div>
           <span className="font-extrabold tracking-tight text-sm sm:text-base text-white whitespace-nowrap">
             {companySettings.companyName || 'MAGAZZINO EDILE'}
