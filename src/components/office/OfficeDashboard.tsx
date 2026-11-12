@@ -432,7 +432,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                       {/* Items Count */}
                       <td className="py-3.5 px-4 text-center">
                         <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 font-mono font-bold text-slate-800">
-                          {order.items.length} {order.items.length === 1 ? 'riga' : 'righe'}
+                          {order.items.filter(item => item.line_type !== 'DESCRIPTION').length} {order.items.filter(item => item.line_type !== 'DESCRIPTION').length === 1 ? 'articolo' : 'articoli'}
                         </span>
                       </td>
 
