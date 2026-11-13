@@ -526,6 +526,25 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                     <div className="text-xs font-bold text-slate-900 line-clamp-2 leading-snug">
                       {item.product.description}
                     </div>
+                    <div className="flex flex-wrap items-center gap-1 mt-2">
+                      <span className="text-[9px] font-bold uppercase text-slate-400 mr-1">U.M.</span>
+                      {[...new Set([item.product.unit_of_measure, ...(unitOptions[item.product.id] || [])])].map(unit => (
+                        <button key={unit} type="button" onClick={() => setCart(prev => prev.map(row => row.id === item.id ? { ...row, unitOfMeasure: unit } : row))}
+                          className={'min-h-8 px-2.5 rounded-lg border text-[10px] font-black ' + ((item.unitOfMeasure || item.product!.unit_of_measure) === unit ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-500')}>{unit}</button>
+                      ))}
+                      <input value={newUnitDraft[item.product.id] || ''} onChange={e => setNewUnitDraft(prev => ({ ...prev, [item.product!.id]: e.target.value }))} placeholder="Nuova U.M." aria-label="Nuova unità di misura" className="w-20 min-h-8 rounded-lg border border-slate-200 px-2 text-[10px] uppercase" />
+                      <button type="button" onClick={async () => {
+                        const productId = item.product!.id;
+                        const unit = (newUnitDraft[productId] || '').trim().toUpperCase();
+                        if (!unit) return;
+                        try {
+                          await saveProductUnitOption(productId, unit);
+                          setUnitOptions(prev => ({ ...prev, [productId]: [...new Set([...(prev[productId] || []), unit])] }));
+                          setCart(prev => prev.map(row => row.id === item.id ? { ...row, unitOfMeasure: unit } : row));
+                          setNewUnitDraft(prev => ({ ...prev, [productId]: '' }));
+                        } catch (error) { setSubmitError(error instanceof Error ? error.message : 'Unità non salvata'); }
+                      }} className="min-h-8 px-2 rounded-lg bg-slate-900 text-white text-[10px] font-bold">Salva</button>
+                    </div>
                   </div>
 
                   {/* Right: Touch Controls with Large Hitboxes (Min 44x44px) */}
@@ -765,7 +784,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                           <span className="font-mono font-bold text-[11px] text-blue-700 mr-2">{item.product.code}</span>
                           <span className="text-slate-800">{item.product.description}</span>
                         </div>
-                        <div className="font-mono font-black text-slate-900 whitespace-nowrap">{item.quantity} {item.product.unit_of_measure}</div>
+                        <div className="font-mono font-black text-slate-900 whitespace-nowrap">{item.quantity} {item.unitOfMeasure || item.product.unit_of_measure}</div>
                       </>
                     ) : null}
                   </div>
