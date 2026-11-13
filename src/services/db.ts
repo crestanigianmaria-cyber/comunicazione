@@ -708,69 +708,120 @@ export function getPendingOrdersCount(): number {
   return getLocalPendingOrders().length;
 }
 
-export async function syncPendingOrders(): Promise<{ synced: number; remaining: number }> {
-  const pending = getLocalPendingOrders();
-  if (pending.length === 0) return { synced: 0, remaining: 0 };
+let pendingSyncPromise: Promise<{ synced: number; remaining: number; errors: string[] }> | null = null;
 
-  const supabase = getSupabaseClient();
-  if (!supabase) return { synced: 0, remaining: pending.length };
+export function syncPendingOrders(): Promise<{ synced: number; remaining: number; errors: string[] }> {
+  // A single shared promise prevents the online event, timer and manual button
+  // from running the same queue concurrently.
+  if (pendingSyncPromise) return pendingSyncPromise;
 
-  let synced = 0;
-  const stillPending: Order[] = [];
+  pendingSyncPromise = (async () => {
+    const pending = getLocalPendingOrders();
+    if (pending.length === 0) return { synced: 0, remaining: 0, errors: [] };
 
-  for (const order of pending) {
-    try {
-      // Retry with INSERT ... ON CONFLICT DO NOTHING. This is deliberately
-      // idempotent and does not require UPDATE policies for warehouse users.
-      const { error: ordErr } = await supabase.from('orders').upsert({
-        id: order.id,
-        order_number: order.order_number,
-        customer_reference: order.customer_reference,
-        document_type: order.document_type ?? null,
-        warehouse_location: order.warehouse_location ?? 'MAGAZZINO',
-        status: order.status,
-        created_at: order.created_at,
-        updated_at: order.updated_at,
-      }, { onConflict: 'id', ignoreDuplicates: true });
-
-      if (ordErr) {
-        console.warn('[Order sync] Failed to save order:', order.id, ordErr);
-        stillPending.push(order);
-        continue;
-      }
-
-      const dbItems = order.items.map(it => ({
-        id: it.id,
-        order_id: order.id,
-        product_id: it.product_id,
-        line_type: it.line_type ?? 'PRODUCT',
-        manual_description: it.manual_description ?? null,
-        product_code_snapshot: it.product_code_snapshot,
-        product_description_snapshot: it.product_description_snapshot,
-        unit_of_measure_snapshot: it.unit_of_measure_snapshot,
-        alternative_code_snapshot: it.alternative_code_snapshot,
-        quantity: it.quantity,
-        created_at: order.created_at,
-      }));
-
-      const { error: itemsErr } = await supabase
-        .from('order_items')
-        .upsert(dbItems, { onConflict: 'id', ignoreDuplicates: true });
-
-      if (itemsErr) {
-        console.warn('[Order sync] Failed to save order items:', order.id, itemsErr);
-        stillPending.push(order);
-        continue;
-      }
-
-      synced++;
-    } catch {
-      stillPending.push(order);
+    const supabase = getSupabaseClient();
+    if (!supabase) {
+      return {
+        synced: 0,
+        remaining: pending.length,
+        errors: ['Connessione a Supabase non configurata. Gli ordini restano salvati sul dispositivo.'],
+      };
     }
-  }
 
-  saveLocalPendingOrders(stillPending);
-  return { synced, remaining: stillPending.length };
+    let synced = 0;
+    const stillPending: Order[] = [];
+    const errors: string[] = [];
+
+    for (const order of pending) {
+      try {
+        if (!order.id || !Array.isArray(order.items) || order.items.length === 0) {
+          stillPending.push(order);
+          errors.push(`${order.order_number || order.id || 'Ordine'}: dati ordine incompleti; nessun dato è stato eliminato.`);
+          continue;
+        }
+
+        // Keep the same ID on every retry. An empty number lets the database
+        // trigger assign the canonical sequence when the header is first created.
+        // ignoreDuplicates makes retries safe if the header was saved before a timeout.
+        const { error: orderError } = await supabase.from('orders').upsert({
+          id: order.id,
+          order_number: '',
+          customer_reference: order.customer_reference,
+          document_type: order.document_type ?? null,
+          warehouse_location: order.warehouse_location ?? 'MAGAZZINO',
+          status: order.status,
+          created_at: order.created_at,
+          updated_at: order.updated_at,
+        }, { onConflict: 'id', ignoreDuplicates: true });
+
+        if (orderError) {
+          stillPending.push(order);
+          errors.push(`${order.order_number}: ${orderError.message}`);
+          continue;
+        }
+
+        // Read the database-generated number. This also handles a previous
+        // attempt that created the header but lost its network response.
+        const { data: savedHeader, error: headerReadError } = await supabase
+          .from('orders')
+          .select('order_number')
+          .eq('id', order.id)
+          .maybeSingle();
+
+        if (headerReadError || !savedHeader) {
+          stillPending.push(order);
+          errors.push(`${order.order_number}: impossibile verificare l'intestazione salvata${headerReadError ? ` (${headerReadError.message})` : ''}.`);
+          continue;
+        }
+
+        const dbItems = order.items.map(it => ({
+          id: it.id,
+          order_id: order.id,
+          product_id: it.product_id,
+          line_type: it.line_type ?? 'PRODUCT',
+          manual_description: it.manual_description ?? null,
+          product_code_snapshot: it.product_code_snapshot,
+          product_description_snapshot: it.product_description_snapshot,
+          unit_of_measure_snapshot: it.unit_of_measure_snapshot,
+          alternative_code_snapshot: it.alternative_code_snapshot,
+          quantity: it.quantity,
+          created_at: order.created_at,
+        }));
+
+        // Upsert by the stable item ID: partial prior attempts are completed
+        // without inserting duplicate rows.
+        const { error: itemsError } = await supabase
+          .from('order_items')
+          .upsert(dbItems, { onConflict: 'id', ignoreDuplicates: true });
+
+        if (itemsError) {
+          stillPending.push(order);
+          errors.push(`${savedHeader.order_number || order.order_number}: righe non sincronizzate (${itemsError.message}).`);
+          continue;
+        }
+
+        // Keep the authoritative database number on this device as well.
+        const updatedOrder = { ...order, order_number: savedHeader.order_number || order.order_number };
+        const localOrders = getLocalOrders().map(local =>
+          local.id === order.id ? { ...local, order_number: updatedOrder.order_number } : local
+        );
+        saveLocalOrders(localOrders);
+        synced++;
+      } catch (error) {
+        stillPending.push(order);
+        const message = error instanceof Error ? error.message : String(error);
+        errors.push(`${order.order_number || order.id}: ${message}`);
+      }
+    }
+
+    // Remove only orders whose header and every item upsert completed successfully.
+    saveLocalPendingOrders(stillPending);
+    return { synced, remaining: stillPending.length, errors };
+  })();
+
+  return pendingSyncPromise.finally(() => {
+    pendingSyncPromise = null;
+  });
 }
 
 // --------------------------------------------------------------------------
