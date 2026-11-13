@@ -58,6 +58,18 @@ export default function App() {
     typeof Notification !== 'undefined' ? Notification.permission : 'denied'
   );
   const notifiedOrderIds = useRef<Set<string>>(new Set());
+  const newOrdersCount = currentRole === 'ufficio' ? orders.filter(order => order.status === 'NUOVO' && !order.archived_at).length : 0;
+
+  // Badge numerico sull'icona PWA, se il browser/sistema operativo lo supporta.
+  useEffect(() => {
+    if (currentRole !== 'ufficio' || typeof navigator === 'undefined') return;
+    const badgeNavigator = navigator as Navigator & { setAppBadge?: (count?: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+    if (newOrdersCount > 0 && badgeNavigator.setAppBadge) {
+      void badgeNavigator.setAppBadge(newOrdersCount).catch(() => {});
+    } else if (badgeNavigator.clearAppBadge) {
+      void badgeNavigator.clearAppBadge().catch(() => {});
+    }
+  }, [currentRole, newOrdersCount]);
 
   // Global Excel Import Modal
   const [showExcelModal, setShowExcelModal] = useState(false);
@@ -212,6 +224,7 @@ export default function App() {
         isOnline={isOnline}
         notificationPermission={notificationPermission}
         onEnableNotifications={handleEnableNotifications}
+        newOrdersCount={newOrdersCount}
       />
 
       {/* Main View Area */}
