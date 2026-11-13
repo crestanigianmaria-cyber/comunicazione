@@ -727,6 +727,7 @@ export async function syncPendingOrders(): Promise<{ synced: number; remaining: 
         order_number: order.order_number,
         customer_reference: order.customer_reference,
         document_type: order.document_type ?? null,
+        warehouse_location: order.warehouse_location ?? 'MAGAZZINO',
         status: order.status,
         created_at: order.created_at,
         updated_at: order.updated_at,
