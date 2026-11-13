@@ -137,13 +137,13 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
     <div className="space-y-6">
       {/* Real-time New Order Banner Alert */}
       {newOrderAlert && (
-        <div className="bg-blue-600 text-white p-4 rounded-2xl shadow-lg shadow-blue-500/20 flex items-center justify-between gap-4 animate-in fade-in slide-in-from-top-4 duration-300">
+        <div className="bg-red-600 text-white p-4 sm:p-5 rounded-2xl shadow-xl shadow-red-600/30 ring-2 ring-red-300 flex items-center justify-between gap-3 animate-pulse animate-in fade-in slide-in-from-top-4 duration-300">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 rounded-xl bg-white/25 flex items-center justify-center shrink-0 ring-2 ring-white/40">
               <BellRing className="w-5 h-5 text-white animate-bounce" />
             </div>
             <div>
-              <div className="text-xs font-bold uppercase tracking-wider text-blue-200">
+              <div className="text-xs font-bold uppercase tracking-wider text-red-100">
                 Nuovo Ordine Ricevuto dal Magazzino!
               </div>
               <div className="text-sm font-black">
@@ -157,13 +157,13 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                 setSelectedOrder(newOrderAlert);
                 onClearNewOrderAlert();
               }}
-              className="px-3.5 py-1.5 rounded-lg bg-white text-blue-900 text-xs font-black hover:bg-blue-50 transition"
+              className="px-3.5 py-1.5 rounded-lg bg-white text-red-700 text-xs font-black hover:bg-red-50 transition"
             >
               Apri Dettaglio
             </button>
             <button
               onClick={onClearNewOrderAlert}
-              className="px-2.5 py-1.5 rounded-lg text-blue-200 hover:text-white text-xs font-semibold"
+              className="px-2.5 py-1.5 rounded-lg text-red-100 hover:text-white text-xs font-semibold"
             >
               Chiudi
             </button>
@@ -179,7 +179,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
             onClick={() => setStatusFilter(statusFilter === 'NUOVO' ? 'ALL' : 'NUOVO')}
             className={`bg-white rounded-2xl p-5 border text-left transition shadow-xs flex items-center justify-between cursor-pointer ${
               statusFilter === 'NUOVO'
-                ? 'border-amber-500 ring-2 ring-amber-500/20 bg-amber-50/20'
+                ? 'border-red-500 ring-2 ring-red-500/30 bg-red-50'
                 : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50/50'
             }`}
           >
@@ -187,12 +187,12 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
                 Nuovi Ordini
               </span>
-              <div className="text-3xl font-black font-mono tracking-tight text-amber-600 mt-1">
+              <div className="text-3xl font-black font-mono tracking-tight text-red-600 mt-1">
                 {kpiStats.nuovi}
               </div>
               <span className="text-[11px] text-slate-400 mt-0.5 block">Da prendere in carico</span>
             </div>
-            <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+            <div className="w-12 h-12 rounded-xl bg-red-100 text-red-600 animate-pulse flex items-center justify-center shrink-0">
               <Inbox className="w-6 h-6" />
             </div>
           </button>
@@ -389,13 +389,14 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                     <tr
                       key={order.id}
                       onClick={() => setSelectedOrder(order)}
-                      className="hover:bg-blue-50/50 cursor-pointer transition"
+                      className={order.status === 'NUOVO' && !isTrashView ? 'bg-red-50/70 hover:bg-red-100 cursor-pointer transition border-l-4 border-red-500' : 'hover:bg-blue-50/50 cursor-pointer transition'}
                     >
                       {/* Order Number */}
                       <td className="py-3.5 px-4">
                         <span className="font-mono font-black text-sm text-blue-700">
                           {order.order_number}
                         </span>
+                        {order.status === 'NUOVO' && !isTrashView && <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-red-600 px-2 py-0.5 text-[9px] font-black text-white shadow-sm animate-pulse"><span className="h-1.5 w-1.5 rounded-full bg-white"/> NUOVO</span>}
                         <span className="block mt-1 text-[9px] font-black uppercase tracking-wide text-emerald-700">{order.warehouse_location === 'DEPOSITO' ? 'Deposito' : 'Magazzino'}</span>
                       </td>
 
