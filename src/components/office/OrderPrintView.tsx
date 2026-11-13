@@ -97,6 +97,7 @@ export const OrderPrintView: React.FC<OrderPrintViewProps> = ({
                 {order.document_type ? ORDER_DOCUMENT_LABELS[order.document_type] : 'DDT'}
               </span>
             </div>
+            <div className="mb-2"><span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Punto di carico</span><div className="text-sm font-black text-slate-900">{order.warehouse_location === 'DEPOSITO' ? 'Deposito' : 'Magazzino'}</div></div>
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
               Riferimento Cliente / Destinazione / Cantiere
             </span>

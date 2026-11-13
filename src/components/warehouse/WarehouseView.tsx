@@ -18,14 +18,15 @@ import {
   FileText,
   AlignLeft
 } from 'lucide-react';
-import { Product, CompanySettings, OrderDocumentType, ORDER_DOCUMENT_LABELS } from '../../types';
+import { Product, CompanySettings, OrderDocumentType, ORDER_DOCUMENT_LABELS, WarehouseLocation } from '../../types';
 import { searchProducts } from '../../lib/search';
-import { createNewOrder } from '../../services/db';
+import { createNewOrder, fetchProductUnitOptions, saveProductUnitOption } from '../../services/db';
 
 interface CartItem {
   id: string;
   product?: Product;
   quantity: number;
+  unitOfMeasure?: string;
   isDescription?: boolean;
   description?: string;
 }
@@ -45,6 +46,9 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   isProductsLoading = false,
 }) => {
   const [customerReference, setCustomerReference] = useState('');
+  const [warehouseLocation, setWarehouseLocation] = useState<WarehouseLocation>(() => { try { return (localStorage.getItem('saggin_warehouse_location') as WarehouseLocation) || 'MAGAZZINO'; } catch { return 'MAGAZZINO'; } });
+  const [unitOptions, setUnitOptions] = useState<Record<string, string[]>>({});
+  const [newUnitDraft, setNewUnitDraft] = useState<Record<string, string>>({});
   const [documentType, setDocumentType] = useState<OrderDocumentType | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
@@ -99,7 +103,8 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
         };
         return updated;
       } else {
-        return [{ id: product.code, product, quantity: 1 }, ...prevCart];
+        void fetchProductUnitOptions(product.id).then(options => setUnitOptions(prev => ({ ...prev, [product.id]: options })));
+        return [{ id: product.code, product, quantity: 1, unitOfMeasure: product.unit_of_measure }, ...prevCart];
       }
     });
 
@@ -190,6 +195,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       const newOrder = await createNewOrder({
         customer_reference: customerReference.trim() || null,
         document_type: documentType,
+        warehouse_location: warehouseLocation,
         items: cart,
       });
 
@@ -301,6 +307,14 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
               placeholder="Riferimento cliente / Cantiere / Targa (facoltativo)"
               className="w-full pl-10 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition placeholder:text-slate-400"
             />
+          </div>
+
+          {/* Warehouse / depot selector */}
+          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-center justify-between gap-2 mb-2"><label className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-slate-500">Punto di carico</label><span className="text-[10px] font-semibold text-slate-400">Un solo tocco</span></div>
+            <div className="grid grid-cols-2 gap-2">
+              {([{value:'MAGAZZINO',label:'Magazzino',icon:Package},{value:'DEPOSITO',label:'Deposito',icon:Layers}] as const).map(option => { const selected=warehouseLocation===option.value; const Icon=option.icon; return <button key={option.value} type="button" aria-pressed={selected} onClick={() => { setWarehouseLocation(option.value); try { localStorage.setItem('saggin_warehouse_location',option.value); } catch {} triggerHaptic(); }} className={'min-h-[48px] rounded-xl border-2 px-3 py-2 flex items-center justify-center gap-2 text-sm font-extrabold active:scale-[.98] transition '+(selected?'border-blue-600 bg-blue-50 text-blue-900 shadow-sm':'border-slate-200 bg-white text-slate-600')}><Icon className="w-4 h-4"/>{option.label}{selected&&<Check className="w-4 h-4"/>}</button>; })}
+            </div>
           </div>
 
           {/* Document type selection */}
@@ -511,6 +525,25 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                     </div>
                     <div className="text-xs font-bold text-slate-900 line-clamp-2 leading-snug">
                       {item.product.description}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1 mt-2">
+                      <span className="text-[9px] font-bold uppercase text-slate-400 mr-1">U.M.</span>
+                      {[...new Set([item.product.unit_of_measure, ...(unitOptions[item.product.id] || [])])].map(unit => (
+                        <button key={unit} type="button" onClick={() => setCart(prev => prev.map(row => row.id === item.id ? { ...row, unitOfMeasure: unit } : row))}
+                          className={'min-h-8 px-2.5 rounded-lg border text-[10px] font-black ' + ((item.unitOfMeasure || item.product!.unit_of_measure) === unit ? 'border-blue-600 bg-blue-50 text-blue-800' : 'border-slate-200 bg-white text-slate-500')}>{unit}</button>
+                      ))}
+                      <input value={newUnitDraft[item.product.id] || ''} onChange={e => setNewUnitDraft(prev => ({ ...prev, [item.product!.id]: e.target.value }))} placeholder="Nuova U.M." aria-label="Nuova unità di misura" className="w-20 min-h-8 rounded-lg border border-slate-200 px-2 text-[10px] uppercase" />
+                      <button type="button" onClick={async () => {
+                        const productId = item.product!.id;
+                        const unit = (newUnitDraft[productId] || '').trim().toUpperCase();
+                        if (!unit) return;
+                        try {
+                          await saveProductUnitOption(productId, unit);
+                          setUnitOptions(prev => ({ ...prev, [productId]: [...new Set([...(prev[productId] || []), unit])] }));
+                          setCart(prev => prev.map(row => row.id === item.id ? { ...row, unitOfMeasure: unit } : row));
+                          setNewUnitDraft(prev => ({ ...prev, [productId]: '' }));
+                        } catch (error) { setSubmitError(error instanceof Error ? error.message : 'Unità non salvata'); }
+                      }} className="min-h-8 px-2 rounded-lg bg-slate-900 text-white text-[10px] font-bold">Salva</button>
                     </div>
                   </div>
 
@@ -751,7 +784,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                           <span className="font-mono font-bold text-[11px] text-blue-700 mr-2">{item.product.code}</span>
                           <span className="text-slate-800">{item.product.description}</span>
                         </div>
-                        <div className="font-mono font-black text-slate-900 whitespace-nowrap">{item.quantity} {item.product.unit_of_measure}</div>
+                        <div className="font-mono font-black text-slate-900 whitespace-nowrap">{item.quantity} {item.unitOfMeasure || item.product.unit_of_measure}</div>
                       </>
                     ) : null}
                   </div>
