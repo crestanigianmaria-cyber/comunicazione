@@ -496,7 +496,7 @@ export async function createNewOrder(orderInput: {
       manual_description: null,
       product_code_snapshot: item.product.code,
       product_description_snapshot: item.product.description,
-      unit_of_measure_snapshot: item.product.unit_of_measure,
+      unit_of_measure_snapshot: item.unitOfMeasure || item.product.unit_of_measure,
       alternative_code_snapshot: item.product.alternative_code || null,
       quantity: Number(item.quantity) || 1,
     };
