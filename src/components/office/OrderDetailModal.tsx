@@ -102,6 +102,10 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
               </span>
             </div>
             <div>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Punto di carico</span>
+              <span className="inline-flex mt-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-black text-emerald-800">{currentOrder.warehouse_location === 'DEPOSITO' ? 'Deposito' : 'Magazzino'}</span>
+            </div>
+            <div>
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
               Cliente / Riferimento Cantiere
             </span>
