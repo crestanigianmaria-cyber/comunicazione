@@ -1,5 +1,7 @@
 export type UnitOfMeasure = 'PZ' | 'KG' | 'ML' | 'MQ' | 'MC' | 'NR' | 'CF' | string;
 
+export type WarehouseLocation = 'MAGAZZINO' | 'DEPOSITO';
+
 export type OrderStatus = 'NUOVO' | 'PRESO IN CARICO' | 'COMPLETATO';
 
 export type OrderDocumentType = 'SCONTRINO' | 'DDT' | 'FATTURA' | 'NOTA_PRELIEVO';
@@ -39,6 +41,7 @@ export interface Order {
   order_number: string; // e.g. "ORD-000001"
   customer_reference: string | null; // Optional customer name, truck plate, jobsite
   document_type?: OrderDocumentType | null; // Document requested for this warehouse order
+  warehouse_location?: WarehouseLocation | null; // Selected loading site
   status: OrderStatus;
   created_at: string;
   updated_at: string;
