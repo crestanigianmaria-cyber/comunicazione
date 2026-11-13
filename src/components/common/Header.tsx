@@ -14,6 +14,7 @@ interface HeaderProps {
   isOnline: boolean;
   notificationPermission: NotificationPermission;
   onEnableNotifications: () => void;
+  newOrdersCount: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -26,6 +27,7 @@ export const Header: React.FC<HeaderProps> = ({
   isOnline,
   notificationPermission,
   onEnableNotifications,
+  newOrdersCount,
 }) => {
   const [soundOn, setSoundOn] = React.useState(isSoundEnabled());
 
@@ -68,7 +70,7 @@ export const Header: React.FC<HeaderProps> = ({
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
-                Dashboard Ordini
+                <span className="inline-flex items-center gap-2">Dashboard Ordini{newOrdersCount > 0 && <span className="inline-flex min-w-5 h-5 px-1.5 items-center justify-center rounded-full bg-red-600 text-white text-[10px] font-black shadow-[0_0_12px_rgba(239,68,68,.8)] animate-pulse">{newOrdersCount}</span>}</span>
               </button>
               <button
                 onClick={() => onNavigate('ufficio_storico')}
@@ -137,6 +139,12 @@ export const Header: React.FC<HeaderProps> = ({
             <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
             <span>{isOnline ? 'Online' : 'Offline'}</span>
           </div>
+
+          {currentRole === 'ufficio' && newOrdersCount > 0 && (
+            <button onClick={() => onNavigate('ufficio_dashboard')} className="relative flex items-center gap-2 px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-black shadow-lg shadow-red-600/30 animate-pulse" title="Apri i nuovi ordini">
+              <Bell className="w-4 h-4" /> NUOVI ORDINI <span className="min-w-5 h-5 rounded-full bg-white text-red-700 inline-flex items-center justify-center px-1">{newOrdersCount}</span>
+            </button>
+          )}
 
           {currentRole === 'ufficio' && (
             <button
