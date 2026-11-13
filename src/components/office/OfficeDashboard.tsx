@@ -396,6 +396,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                         <span className="font-mono font-black text-sm text-blue-700">
                           {order.order_number}
                         </span>
+                        <span className="block mt-1 text-[9px] font-black uppercase tracking-wide text-emerald-700">{order.warehouse_location === 'DEPOSITO' ? 'Deposito' : 'Magazzino'}</span>
                       </td>
 
                       {/* Customer Reference */}
