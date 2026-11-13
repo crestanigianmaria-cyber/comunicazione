@@ -452,6 +452,7 @@ export async function fetchOrders(forceRefresh = false): Promise<Order[]> {
 export async function createNewOrder(orderInput: {
   customer_reference: string | null;
   document_type?: import('../types').OrderDocumentType;
+  warehouse_location?: import('../types').WarehouseLocation;
   items: {
     id: string;
     product?: Product;
@@ -506,6 +507,7 @@ export async function createNewOrder(orderInput: {
     order_number: orderNumber,
     customer_reference: orderInput.customer_reference?.trim() || null,
     document_type: orderInput.document_type ?? 'DDT',
+    warehouse_location: orderInput.warehouse_location ?? 'MAGAZZINO',
     status: 'NUOVO',
     created_at: now,
     updated_at: now,
@@ -551,6 +553,7 @@ export async function createNewOrder(orderInput: {
           order_number: '',
           customer_reference: newOrder.customer_reference,
           document_type: newOrder.document_type,
+          warehouse_location: newOrder.warehouse_location,
           status: newOrder.status,
           created_at: newOrder.created_at,
           updated_at: newOrder.updated_at,
@@ -943,4 +946,23 @@ export async function changeRolePassword(role: UserRole, newPass: string): Promi
 
   const { error } = await supabase.auth.updateUser({ password: newPass.trim() });
   if (error) throw new Error(error.message);
+}
+
+
+// Shared alternative units for products (Supabase-backed).
+export async function fetchProductUnitOptions(productId: string): Promise<string[]> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return [];
+  const { data, error } = await supabase.from('product_unit_options').select('unit').eq('product_id', productId).order('unit');
+  if (error) { console.warn('[Units] Could not load product units:', error); return []; }
+  return (data || []).map((row: any) => String(row.unit));
+}
+
+export async function saveProductUnitOption(productId: string, unit: string): Promise<void> {
+  const normalized = unit.trim().toUpperCase();
+  if (!normalized || normalized.length > 20) throw new Error('Inserisci un\'unità valida (massimo 20 caratteri).');
+  const supabase = getSupabaseClient();
+  if (!supabase) throw new Error('Connessione a Supabase non disponibile: impossibile condividere la nuova unità.');
+  const { error } = await supabase.from('product_unit_options').upsert({ product_id: productId, unit: normalized }, { onConflict: 'product_id,unit', ignoreDuplicates: true });
+  if (error) throw error;
 }
