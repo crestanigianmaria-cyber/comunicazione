@@ -1,5 +1,18 @@
 import React from 'react';
-import { Volume2, VolumeX, LogOut, ArrowRightLeft, Bell } from 'lucide-react';
+import {
+  Volume2,
+  VolumeX,
+  LogOut,
+  ArrowRightLeft,
+  Bell,
+  LayoutDashboard,
+  History,
+  Trash2,
+  FileSpreadsheet,
+  Settings,
+  PlusCircle,
+  ClipboardList
+} from 'lucide-react';
 import { UserRole, CompanySettings } from '../../types';
 import { PWAInstallButton } from './PWAInstallButton';
 import { isSoundEnabled, setSoundEnabled } from '../../lib/audio';
@@ -38,77 +51,105 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-slate-900 border-b border-slate-800 text-white select-none no-print">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
-        {/* Zone 1: Single Brand Wordmark */}
-        <div className="flex items-center gap-2.5 shrink-0">
-          <div className="h-9 w-[4.25rem] rounded-lg bg-white border border-white/80 shadow-sm flex items-center justify-center p-1 overflow-hidden">
+    <header className="sticky top-0 z-40 bg-[#0b0f19] border-b border-slate-800 text-white select-none no-print shadow-sm">
+      {/* Top 2px Saggin Corporate Accent Bar */}
+      <div className="h-0.5 w-full bg-red-600" />
+
+      <div className="max-w-[1440px] mx-auto px-3 sm:px-6 h-15 flex items-center justify-between gap-3">
+        {/* Zone 1: Brand Identity & Active Terminal Badge */}
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="h-10 w-[4.5rem] rounded-lg bg-white border border-slate-200 shadow-xs flex items-center justify-center p-1 overflow-hidden shrink-0">
             <img
               src="/saggin-logo.png"
               alt="Logo Saggin"
               className="h-full w-full object-contain"
-              width="68"
-              height="38"
+              width="72"
+              height="40"
               decoding="async"
             />
           </div>
-          <span className="font-extrabold tracking-tight text-sm sm:text-base text-white whitespace-nowrap">
-            {companySettings.companyName || 'MAGAZZINO EDILE'}
-          </span>
-          <span className="hidden sm:inline text-xs text-slate-400 font-medium">· WMS</span>
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2">
+              <span className="font-extrabold tracking-tight text-sm sm:text-base text-white whitespace-nowrap leading-none">
+                {companySettings.companyName || 'SAGGIN'}
+              </span>
+              <span className={`text-[10px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                currentRole === 'magazzino'
+                  ? 'bg-red-600/20 text-red-400 border border-red-500/30'
+                  : 'bg-slate-800 text-slate-300 border border-slate-700'
+              }`}>
+                {currentRole === 'magazzino' ? 'TERMINALE PIAZZALE' : 'ERP UFFICIO'}
+              </span>
+            </div>
+            <span className="hidden sm:inline text-[11px] text-slate-400 font-medium leading-tight mt-0.5">
+              Saggin Guglielmo S.R.L. · Gestione Ordini & Logistica
+            </span>
+          </div>
         </div>
 
-        {/* Zone 2: Navigation Links (When logged in as Office or switching views) */}
-        <nav className="hidden md:flex items-center gap-1 text-xs font-semibold">
+        {/* Zone 2: Desktop / Landscape Tablet Navigation */}
+        <nav className="hidden lg:flex items-center gap-1 text-xs font-semibold bg-slate-900/90 p-1 rounded-xl border border-slate-800">
           {currentRole === 'ufficio' && (
             <>
               <button
                 onClick={() => onNavigate('ufficio_dashboard')}
-                className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
+                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 whitespace-nowrap ${
                   activeView === 'ufficio_dashboard'
-                    ? 'bg-slate-800 text-white font-bold'
-                    : 'text-slate-400 hover:text-white'
+                    ? 'bg-white text-slate-950 font-extrabold shadow-xs'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
                 }`}
               >
-                <span className="inline-flex items-center gap-2">Dashboard Ordini{newOrdersCount > 0 && <span className="inline-flex min-w-5 h-5 px-1.5 items-center justify-center rounded-full bg-red-600 text-white text-[10px] font-black shadow-[0_0_12px_rgba(239,68,68,.8)] animate-pulse">{newOrdersCount}</span>}</span>
+                <LayoutDashboard className="w-3.5 h-3.5" />
+                <span>Dashboard Ordini</span>
+                {newOrdersCount > 0 && (
+                  <span className="inline-flex min-w-5 h-5 px-1.5 items-center justify-center rounded-full bg-red-600 text-white text-[10px] font-mono font-black animate-pulse">
+                    {newOrdersCount}
+                  </span>
+                )}
               </button>
               <button
                 onClick={() => onNavigate('ufficio_storico')}
-                className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
+                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap ${
                   activeView === 'ufficio_storico'
-                    ? 'bg-slate-800 text-white font-bold'
-                    : 'text-slate-400 hover:text-white'
+                    ? 'bg-white text-slate-950 font-extrabold shadow-xs'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
                 }`}
               >
-                Storico Completo
-              </button>
-              <button
-                onClick={() => onNavigate('ufficio_cestino')}
-                className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
-                  activeView === 'ufficio_cestino' ? 'bg-slate-800 text-white font-bold' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                Cestino
+                <History className="w-3.5 h-3.5" />
+                <span>Archivio Storico</span>
               </button>
               <button
                 onClick={() => onNavigate('ufficio_catalogo')}
-                className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
+                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap ${
                   activeView === 'ufficio_catalogo'
-                    ? 'bg-slate-800 text-white font-bold'
-                    : 'text-slate-400 hover:text-white'
+                    ? 'bg-white text-slate-950 font-extrabold shadow-xs'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
                 }`}
               >
-                Catalogo Excel
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Listino & Excel</span>
+              </button>
+              <button
+                onClick={() => onNavigate('ufficio_cestino')}
+                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap ${
+                  activeView === 'ufficio_cestino'
+                    ? 'bg-white text-slate-950 font-extrabold shadow-xs'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Cestino</span>
               </button>
               <button
                 onClick={() => onNavigate('ufficio_impostazioni')}
-                className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap ${
+                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-1.5 whitespace-nowrap ${
                   activeView === 'ufficio_impostazioni'
-                    ? 'bg-slate-800 text-white font-bold'
-                    : 'text-slate-400 hover:text-white'
+                    ? 'bg-white text-slate-950 font-extrabold shadow-xs'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
                 }`}
               >
-                Impostazioni & Supabase
+                <Settings className="w-3.5 h-3.5" />
+                <span>Impostazioni</span>
               </button>
             </>
           )}
@@ -117,32 +158,56 @@ export const Header: React.FC<HeaderProps> = ({
             <>
               <button
                 onClick={() => onNavigate('magazzino')}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap ${activeView === 'magazzino' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'}`}
-              >Ordine</button>
+                className={`px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 whitespace-nowrap transition-all ${
+                  activeView === 'magazzino'
+                    ? 'bg-red-600 text-white shadow-xs'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>Nuovo Carico</span>
+              </button>
               <button
                 onClick={() => onNavigate('magazzino_storico')}
-                className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap ${activeView === 'magazzino_storico' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-white'}`}
-              >Storico ordini</button>
+                className={`px-4 py-2 rounded-lg text-xs font-extrabold flex items-center gap-2 whitespace-nowrap transition-all ${
+                  activeView === 'magazzino_storico'
+                    ? 'bg-red-600 text-white shadow-xs'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <ClipboardList className="w-4 h-4" />
+                <span>Storico Invii</span>
+              </button>
             </>
           )}
         </nav>
 
-        {/* Zone 3: Primary Action & Controls */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Connection status indicator */}
+        {/* Zone 3: System Status & Quick Actions */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Connection status badge */}
           <div
-            className={`hidden sm:flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium ${
-              isOnline ? 'text-emerald-400 bg-emerald-950/50' : 'text-amber-400 bg-amber-950/50'
+            className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono font-bold border ${
+              isOnline
+                ? 'text-emerald-400 bg-emerald-950/40 border-emerald-800/50'
+                : 'text-amber-400 bg-amber-950/40 border-amber-800/50'
             }`}
-            title={isOnline ? 'Connesso al database in tempo reale' : 'Disconnesso - Operazioni in locale'}
+            title={isOnline ? 'Connesso a Supabase Realtime' : 'Modalità Offline - Salvataggio locale attivo'}
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
-            <span>{isOnline ? 'Online' : 'Offline'}</span>
+            <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+            <span>{isOnline ? 'SYNC ATTIVO' : 'OFFLINE'}</span>
           </div>
 
           {currentRole === 'ufficio' && newOrdersCount > 0 && (
-            <button onClick={() => onNavigate('ufficio_dashboard')} className="relative flex items-center gap-2 px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-black shadow-lg shadow-red-600/30 animate-pulse" title="Apri i nuovi ordini">
-              <Bell className="w-4 h-4" /> NUOVI ORDINI <span className="min-w-5 h-5 rounded-full bg-white text-red-700 inline-flex items-center justify-center px-1">{newOrdersCount}</span>
+            <button
+              onClick={() => onNavigate('ufficio_dashboard')}
+              className="relative flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-black shadow-md shadow-red-600/25 animate-pulse"
+              title="Visualizza nuovi ordini dal magazzino"
+            >
+              <Bell className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline">NUOVI</span>
+              <span className="min-w-5 h-5 rounded-full bg-white text-red-700 font-mono inline-flex items-center justify-center px-1 text-[11px]">
+                {newOrdersCount}
+              </span>
             </button>
           )}
 
@@ -150,28 +215,28 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               onClick={onEnableNotifications}
               disabled={notificationPermission !== 'default'}
-              className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] font-semibold transition ${
+              className={`hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition ${
                 notificationPermission === 'granted'
-                  ? 'text-emerald-300 bg-emerald-950/50 cursor-default'
+                  ? 'text-slate-300 bg-slate-900 border-slate-800 cursor-default'
                   : notificationPermission === 'denied'
-                  ? 'text-amber-300 bg-amber-950/50 cursor-not-allowed'
-                  : 'text-blue-200 bg-blue-950/50 hover:bg-blue-900'
+                  ? 'text-amber-400 bg-amber-950/30 border-amber-800/40 cursor-not-allowed'
+                  : 'text-white bg-slate-800 border-slate-700 hover:bg-slate-700'
               }`}
               title={
                 notificationPermission === 'granted'
                   ? 'Notifiche desktop attive'
                   : notificationPermission === 'denied'
-                  ? 'Notifiche bloccate dal browser: abilitarle nelle impostazioni del sito'
+                  ? 'Notifiche bloccate dal browser'
                   : 'Attiva le notifiche desktop per i nuovi ordini'
               }
             >
-              <Bell className="w-4 h-4" />
-              <span className="hidden sm:inline">
+              <Bell className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline">
                 {notificationPermission === 'granted'
-                  ? 'Notifiche attive'
+                  ? 'Avvisi On'
                   : notificationPermission === 'denied'
-                  ? 'Notifiche bloccate'
-                  : 'Attiva notifiche'}
+                  ? 'Avvisi Bloccati'
+                  : 'Attiva Avvisi'}
               </span>
             </button>
           )}
@@ -179,50 +244,130 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Audio Chime Toggle */}
           <button
             onClick={toggleSound}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
-            title={soundOn ? 'Notifiche audio attive (disattiva)' : 'Notifiche audio disattivate (attiva)'}
+            className={`p-2 rounded-lg border transition touch-manipulation ${
+              soundOn
+                ? 'text-white bg-slate-900 border-slate-800 hover:bg-slate-800'
+                : 'text-slate-500 bg-slate-900/50 border-slate-800/50 hover:text-slate-300'
+            }`}
+            title={soundOn ? 'Audio notifiche attivo (clicca per mutare)' : 'Audio notifiche disattivato (clicca per attivare)'}
           >
-            {soundOn ? <Volume2 className="w-4 h-4 text-blue-400" /> : <VolumeX className="w-4 h-4 text-slate-500" />}
+            {soundOn ? <Volume2 className="w-4 h-4 text-emerald-400" /> : <VolumeX className="w-4 h-4" />}
           </button>
 
           {/* PWA Install Button */}
           <PWAInstallButton />
 
-          {/* Role badge / Switcher */}
+          {/* Role Switcher */}
           {currentRole && (
             <button
               onClick={onSwitchRole}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition"
-              title="Cambia Ruolo (Magazzino / Ufficio)"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 text-xs font-bold transition touch-manipulation"
+              title="Cambia Postazione (Magazzino / Ufficio)"
             >
-              <ArrowRightLeft className="w-3.5 h-3.5 text-blue-400" />
-              <span className="capitalize">{currentRole}</span>
+              <ArrowRightLeft className="w-3.5 h-3.5 text-red-400" />
+              <span className="capitalize hidden sm:inline">{currentRole}</span>
             </button>
           )}
 
           {currentRole && (
             <button
               onClick={onLogout}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-800 transition"
-              title="Disconnetti"
+              className="p-2 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-900 border border-transparent hover:border-slate-800 transition touch-manipulation"
+              title="Disconnetti sessione"
             >
               <LogOut className="w-4 h-4" />
             </button>
           )}
         </div>
       </div>
+
+      {/* Sub-navigation bar for Mobile & Portrait Tablets (< 1024px) */}
       {currentRole === 'magazzino' && (
-        <div className="md:hidden max-w-7xl mx-auto px-4 pb-2 flex gap-2">
-          <button
-            onClick={() => onNavigate('magazzino')}
-            className={`flex-1 py-2 rounded-lg text-xs font-bold ${activeView === 'magazzino' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'}`}
-          >Nuovo ordine</button>
-          <button
-            onClick={() => onNavigate('magazzino_storico')}
-            className={`flex-1 py-2 rounded-lg text-xs font-bold ${activeView === 'magazzino_storico' ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-300'}`}
-          >Storico ordini</button>
+        <div className="lg:hidden border-t border-slate-800/80 bg-slate-950/90 px-3 py-2">
+          <div className="max-w-3xl mx-auto grid grid-cols-2 gap-2">
+            <button
+              onClick={() => onNavigate('magazzino')}
+              className={`min-h-[42px] rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition touch-manipulation ${
+                activeView === 'magazzino'
+                  ? 'bg-red-600 text-white shadow-sm'
+                  : 'bg-slate-900 text-slate-300 border border-slate-800'
+              }`}
+            >
+              <PlusCircle className="w-4 h-4" />
+              <span>NUOVO CARICO</span>
+            </button>
+            <button
+              onClick={() => onNavigate('magazzino_storico')}
+              className={`min-h-[42px] rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition touch-manipulation ${
+                activeView === 'magazzino_storico'
+                  ? 'bg-red-600 text-white shadow-sm'
+                  : 'bg-slate-900 text-slate-300 border border-slate-800'
+              }`}
+            >
+              <ClipboardList className="w-4 h-4" />
+              <span>STORICO ORDINI</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {currentRole === 'ufficio' && (
+        <div className="lg:hidden border-t border-slate-800/80 bg-slate-950/90 px-3 py-2 overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-1.5 min-w-max">
+            <button
+              onClick={() => onNavigate('ufficio_dashboard')}
+              className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${
+                activeView === 'ufficio_dashboard' ? 'bg-white text-slate-950' : 'text-slate-300 bg-slate-900'
+              }`}
+            >
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              <span>Ordini</span>
+              {newOrdersCount > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-red-600 text-white text-[10px] font-mono font-black">
+                  {newOrdersCount}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => onNavigate('ufficio_storico')}
+              className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${
+                activeView === 'ufficio_storico' ? 'bg-white text-slate-950' : 'text-slate-300 bg-slate-900'
+              }`}
+            >
+              <History className="w-3.5 h-3.5" />
+              <span>Storico</span>
+            </button>
+            <button
+              onClick={() => onNavigate('ufficio_catalogo')}
+              className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${
+                activeView === 'ufficio_catalogo' ? 'bg-white text-slate-950' : 'text-slate-300 bg-slate-900'
+              }`}
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>Catalogo</span>
+            </button>
+            <button
+              onClick={() => onNavigate('ufficio_cestino')}
+              className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${
+                activeView === 'ufficio_cestino' ? 'bg-white text-slate-950' : 'text-slate-300 bg-slate-900'
+              }`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Cestino</span>
+            </button>
+            <button
+              onClick={() => onNavigate('ufficio_impostazioni')}
+              className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-1.5 ${
+                activeView === 'ufficio_impostazioni' ? 'bg-white text-slate-950' : 'text-slate-300 bg-slate-900'
+              }`}
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>Impostazioni</span>
+            </button>
+          </div>
         </div>
       )}
     </header>
   );
 };
+

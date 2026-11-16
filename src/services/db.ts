@@ -35,11 +35,11 @@ const catalogListeners = new Set<CatalogListener>();
 // Default company settings
 const DEFAULT_COMPANY_SETTINGS: CompanySettings = {
   companyName: 'SAGGIN',
-  legalName: 'Saggin Guglielmo - Materiali Edili',
-  address: 'Sede e Magazzino Forniture Edili',
-  vatNumber: 'IT 01234567890',
-  phone: 'Tel. Magazzino / Ufficio',
-  email: 'ordini@saggin.it',
+  legalName: 'Saggin Guglielmo S.R.L. - Materiali Edili e Ferramenta',
+  address: 'Via P. Roberto, 80 - 36055 Nove (VI) · Sede Marostica: Via Del Donatore, 3',
+  vatNumber: 'IT 01780770242',
+  phone: '+39 0424 590 086',
+  email: 'info@saggin.it',
   notes: 'Materiale caricato su automezzo del cliente. Documento di trasporto interno per emissione bolla / fattura.',
 };
 
@@ -457,6 +457,7 @@ export async function createNewOrder(orderInput: {
     id: string;
     product?: Product;
     quantity: number;
+    unitOfMeasure?: string;
     isDescription?: boolean;
     description?: string;
   }[];

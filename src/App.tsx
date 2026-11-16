@@ -195,7 +195,17 @@ export default function App() {
 
   // Wait for Supabase to restore the persisted authentication session.
   if (authLoading) {
-    return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white text-sm">Verifica accesso in corso...</div>;
+    return (
+      <div className="min-h-screen bg-[#0b0f19] flex flex-col items-center justify-center text-white gap-4">
+        <div className="bg-white rounded-xl px-4 py-2.5 shadow-lg">
+          <img src="/saggin-logo.png" alt="Saggin Guglielmo S.R.L." className="h-9 w-auto object-contain" />
+        </div>
+        <div className="flex items-center gap-2.5 text-xs font-bold uppercase tracking-widest text-slate-400">
+          <span className="w-2 h-2 rounded-full bg-red-600 animate-ping" />
+          <span>Inizializzazione Sistema ERP...</span>
+        </div>
+      </div>
+    );
   }
 
   // If not logged in, or switching roles, show LoginModal
@@ -209,7 +219,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900 select-none">
+    <div className="min-h-screen bg-[#f4f6f8] flex flex-col font-sans text-slate-900 select-none">
       {/* Offline Status Alert */}
       <OfflineBanner />
 
@@ -228,7 +238,7 @@ export default function App() {
       />
 
       {/* Main View Area */}
-      <main className="flex-1 w-full max-w-7xl mx-auto p-3 sm:p-6">
+      <main className="flex-1 w-full max-w-[1440px] mx-auto p-3 sm:p-5 lg:p-6">
         {/* INTERFACCIA MAGAZZINO (Mobile First) */}
         {activeView === 'magazzino' && (
           <WarehouseView

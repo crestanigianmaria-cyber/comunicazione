@@ -3,12 +3,11 @@ import {
   X,
   Printer,
   Clock,
-  User,
-  Hash,
-  CheckCircle2,
-  AlertCircle,
-  Truck,
-  ArrowRight
+  Check,
+  Copy,
+  FileText,
+  Warehouse,
+  AlignLeft
 } from 'lucide-react';
 import { Order, OrderStatus, CompanySettings, ORDER_DOCUMENT_LABELS } from '../../types';
 import { updateOrderStatus } from '../../services/db';
@@ -32,6 +31,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
 }) => {
   const [currentOrder, setCurrentOrder] = useState<Order>(order);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   const handleStatusChange = async (newStatus: OrderStatus) => {
     if (newStatus === currentOrder.status || isUpdating) return;
@@ -47,6 +47,12 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
     }
   };
 
+  const handleCopyCode = (code: string) => {
+    navigator.clipboard.writeText(code).catch(() => {});
+    setCopiedCode(code);
+    setTimeout(() => setCopiedCode(null), 1500);
+  };
+
   const formattedDate = new Date(currentOrder.created_at).toLocaleDateString('it-IT', {
     day: '2-digit',
     month: '2-digit',
@@ -58,32 +64,39 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
     minute: '2-digit',
   });
 
+  const productItemsCount = currentOrder.items.filter(i => i.line_type !== 'DESCRIPTION').length;
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh] border border-slate-200">
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+      <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] border border-slate-200">
+        {/* Top corporate bar */}
+        <div className="h-1 w-full bg-red-600" />
+
         {/* Modal Header */}
-        <div className="p-4 sm:p-5 bg-slate-950 text-white flex items-center justify-between border-b border-slate-800">
-          <div className="flex items-center gap-3">
-            <span className="font-mono text-xl sm:text-2xl font-black text-blue-400">
+        <div className="p-4 sm:p-5 bg-[#0b0f19] text-white flex items-center justify-between border-b border-slate-800">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-mono text-xl sm:text-2xl font-black text-white tracking-tight">
               {currentOrder.order_number}
             </span>
-            <div className="flex items-center gap-2 text-xs text-slate-400">
-              <Clock className="w-3.5 h-3.5" />
-              <span>{formattedDate} ore {formattedTime}</span>
-            </div>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-slate-800 border border-slate-700 text-xs font-mono text-slate-300">
+              <Clock className="w-3.5 h-3.5 text-red-400" />
+              <span>{formattedDate} · {formattedTime}</span>
+            </span>
           </div>
 
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={() => onOpenPrint(currentOrder)}
-              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-bold text-white flex items-center gap-1.5 transition"
+              className="px-3.5 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-xs font-extrabold text-white flex items-center gap-1.5 transition shadow-xs"
             >
-              <Printer className="w-3.5 h-3.5 text-blue-400" />
-              <span className="hidden sm:inline">Stampa / PDF</span>
+              <Printer className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Stampa Distinta / PDF</span>
             </button>
             <button
+              type="button"
               onClick={onClose}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
             >
               <X className="w-5 h-5" />
             </button>
@@ -91,117 +104,160 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
         </div>
 
         {/* Customer Reference & Status Control Bar */}
-        <div className="p-4 sm:p-5 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-4">
+        <div className="p-4 sm:p-5 bg-slate-50 border-b border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-5">
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                Tipo documento
+              <span className="text-[10px] font-mono font-extrabold uppercase tracking-wider text-slate-400 block">
+                Tipo Documento
               </span>
-              <span className="inline-flex mt-1 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-800">
+              <span className="inline-flex items-center gap-1.5 mt-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono font-black text-slate-900 shadow-2xs">
+                <FileText className="w-3.5 h-3.5 text-red-600" />
                 {currentOrder.document_type ? ORDER_DOCUMENT_LABELS[currentOrder.document_type] : 'DDT'}
               </span>
             </div>
+
             <div>
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Punto di carico</span>
-              <span className="inline-flex mt-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-black text-emerald-800">{currentOrder.warehouse_location === 'DEPOSITO' ? 'Deposito' : 'Magazzino'}</span>
+              <span className="text-[10px] font-mono font-extrabold uppercase tracking-wider text-slate-400 block">
+                Punto di Carico
+              </span>
+              <span className="inline-flex items-center gap-1.5 mt-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono font-black text-slate-900 shadow-2xs">
+                <Warehouse className="w-3.5 h-3.5 text-slate-600" />
+                {currentOrder.warehouse_location === 'DEPOSITO' ? 'Deposito' : 'Magazzino'}
+              </span>
             </div>
-            <div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-              Cliente / Riferimento Cantiere
-            </span>
-            <div className="text-base font-bold text-slate-900 mt-0.5">
-              {currentOrder.customer_reference || 'Carico al banco senza riferimento specificato'}
-            </div>
+
+            <div className="min-w-[200px]">
+              <span className="text-[10px] font-mono font-extrabold uppercase tracking-wider text-slate-400 block">
+                Cliente / Riferimento Cantiere
+              </span>
+              <div className="text-sm sm:text-base font-extrabold text-slate-900 mt-1">
+                {currentOrder.customer_reference || 'Carico diretto al banco'}
+              </div>
             </div>
           </div>
 
           {/* Status Buttons */}
-          {!readOnly && <div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1.5">
-              Gestione Stato Ordine
-            </span>
-            <div className="flex items-center gap-1.5 p-1 bg-white border border-slate-200 rounded-xl shadow-sm">
-              <button
-                type="button"
-                onClick={() => handleStatusChange('NUOVO')}
-                disabled={isUpdating}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  currentOrder.status === 'NUOVO'
-                    ? 'bg-amber-500 text-slate-950 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                NUOVO
-              </button>
-              <button
-                type="button"
-                onClick={() => handleStatusChange('PRESO IN CARICO')}
-                disabled={isUpdating}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  currentOrder.status === 'PRESO IN CARICO'
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                PRESO IN CARICO
-              </button>
-              <button
-                type="button"
-                onClick={() => handleStatusChange('COMPLETATO')}
-                disabled={isUpdating}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  currentOrder.status === 'COMPLETATO'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                COMPLETATO
-              </button>
+          {!readOnly && (
+            <div>
+              <span className="text-[10px] font-mono font-extrabold uppercase tracking-wider text-slate-400 block mb-1.5">
+                Stato Lavorazione Ufficio
+              </span>
+              <div className="inline-flex items-center gap-1 p-1 bg-slate-200/80 border border-slate-300/80 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => handleStatusChange('NUOVO')}
+                  disabled={isUpdating}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${
+                    currentOrder.status === 'NUOVO'
+                      ? 'bg-red-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  NUOVO
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleStatusChange('PRESO IN CARICO')}
+                  disabled={isUpdating}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${
+                    currentOrder.status === 'PRESO IN CARICO'
+                      ? 'bg-amber-500 text-slate-950 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  PRESO IN CARICO
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleStatusChange('COMPLETATO')}
+                  disabled={isUpdating}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition ${
+                    currentOrder.status === 'COMPLETATO'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  COMPLETATO
+                </button>
+              </div>
             </div>
-          </div>}
+          )}
         </div>
 
         {/* Snapshot Items Table */}
         <div className="p-4 sm:p-5 overflow-y-auto flex-1">
           <div className="flex items-center justify-between mb-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-              Righe dell'ordine ({currentOrder.items.length})
+            <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
+              Distinta Articoli ({productItemsCount} articoli · {currentOrder.items.length} righe totali)
             </h4>
-            <span className="text-[11px] text-slate-500">
-              Dati registrati come snapshot all'invio dell'ordine
+            <span className="hidden sm:inline text-[11px] text-slate-400 font-medium">
+              Clicca sul codice articolo per copiarlo negli appunti
             </span>
           </div>
 
-          <div className="border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+          <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="bg-slate-100 border-b border-slate-200 font-bold text-slate-700 uppercase tracking-wider text-[11px]">
+                <tr className="bg-slate-100 border-b border-slate-200 font-mono font-extrabold text-slate-600 uppercase tracking-wider text-[10px]">
                   <th className="py-2.5 px-3 w-12 text-center">#</th>
-                  <th className="py-2.5 px-3 w-32">Codice</th>
-                  <th className="py-2.5 px-3">Descrizione</th>
-                  <th className="py-2.5 px-3 w-32">Codice Alternativo</th>
-                  <th className="py-2.5 px-3 w-20 text-center">UM</th>
-                  <th className="py-2.5 px-3 w-24 text-right">Quantità</th>
+                  <th className="py-2.5 px-3 w-36">Codice Articolo</th>
+                  <th className="py-2.5 px-3">Descrizione Materiale</th>
+                  <th className="py-2.5 px-3 w-32">Cod. Alternativo</th>
+                  <th className="py-2.5 px-3 w-20 text-center">U.M.</th>
+                  <th className="py-2.5 px-3 w-28 text-right">Quantità</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-200/70">
                 {currentOrder.items.map((item, index) => (
-                  <tr key={item.id} className={item.line_type === 'DESCRIPTION' ? 'bg-amber-50' : 'hover:bg-slate-50/80 transition'}>
+                  <tr
+                    key={item.id}
+                    className={
+                      item.line_type === 'DESCRIPTION'
+                        ? 'bg-amber-50/70'
+                        : 'hover:bg-slate-50 transition'
+                    }
+                  >
                     {item.line_type === 'DESCRIPTION' ? (
-                      <td colSpan={6} className="py-3 px-4 text-sm font-medium text-slate-800 whitespace-pre-wrap">
-                        <span className="mr-2 inline-flex items-center rounded bg-amber-100 px-2 py-0.5 text-[9px] font-black uppercase tracking-wide text-amber-800">Nota</span>
+                      <td colSpan={6} className="py-3 px-4 text-sm font-semibold text-slate-900 whitespace-pre-wrap">
+                        <span className="mr-2 inline-flex items-center gap-1 rounded bg-amber-200/80 px-2 py-0.5 text-[10px] font-mono font-black uppercase tracking-wide text-amber-950">
+                          <AlignLeft className="w-3 h-3" /> Nota
+                        </span>
                         {item.manual_description || item.product_description_snapshot}
                       </td>
                     ) : (
                       <>
-                        <td className="py-3 px-3 text-center text-slate-400 font-mono">{index + 1}</td>
-                        <td className="py-3 px-3">
-                          <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">{item.product_code_snapshot}</span>
+                        <td className="py-3 px-3 text-center text-slate-400 font-mono font-bold">
+                          {index + 1}
                         </td>
-                        <td className="py-3 px-3 font-semibold text-slate-900">{item.product_description_snapshot}</td>
-                        <td className="py-3 px-3 font-mono text-slate-500">{item.alternative_code_snapshot || '—'}</td>
-                        <td className="py-3 px-3 text-center font-bold text-blue-700 uppercase">{item.unit_of_measure_snapshot}</td>
-                        <td className="py-3 px-3 text-right font-mono font-black text-sm text-slate-900">{item.quantity}</td>
+                        <td className="py-3 px-3">
+                          <button
+                            type="button"
+                            onClick={() => handleCopyCode(item.product_code_snapshot)}
+                            title="Clicca per copiare il codice"
+                            className="inline-flex items-center gap-1.5 font-mono font-black text-xs bg-slate-900 hover:bg-red-600 text-white px-2.5 py-1 rounded transition"
+                          >
+                            <span>{item.product_code_snapshot}</span>
+                            {copiedCode === item.product_code_snapshot ? (
+                              <Check className="w-3 h-3 text-emerald-300" />
+                            ) : (
+                              <Copy className="w-3 h-3 opacity-60" />
+                            )}
+                          </button>
+                        </td>
+                        <td className="py-3 px-3 font-bold text-slate-900 text-xs sm:text-sm">
+                          {item.product_description_snapshot}
+                        </td>
+                        <td className="py-3 px-3 font-mono text-slate-500">
+                          {item.alternative_code_snapshot || '—'}
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <span className="font-mono font-extrabold text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 uppercase">
+                            {item.unit_of_measure_snapshot}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-right font-mono font-black text-base text-slate-900 tabular-nums">
+                          {item.quantity}
+                        </td>
                       </>
                     )}
                   </tr>
@@ -213,17 +269,19 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
 
         {/* Modal Footer */}
         <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
-          <div className="text-xs text-slate-500">
-            Identificativo interno database: <span className="font-mono text-[10px]">{currentOrder.id}</span>
+          <div className="text-[11px] text-slate-400 font-mono truncate max-w-xs sm:max-w-md">
+            ID: {currentOrder.id}
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition"
+            className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold transition"
           >
-            Chiudi
+            Chiudi Scheda
           </button>
         </div>
       </div>
     </div>
   );
 };
+

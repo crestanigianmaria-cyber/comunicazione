@@ -97,14 +97,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+    <div className="bg-white rounded-xl border border-slate-200/90 shadow-sm overflow-hidden">
+      {/* Top Corporate Banner */}
+      <div className="bg-[#0b0f19] text-white px-5 py-4 border-b border-slate-800 flex items-center justify-between">
+        <div>
+          <span className="text-[10px] font-black text-red-500 uppercase tracking-[0.2em] block">
+            AMMINISTRAZIONE SISTEMA · SAGGIN GUGLIELMO S.R.L.
+          </span>
+          <h3 className="text-base font-black text-white tracking-tight mt-0.5">
+            Impostazioni Gestionale, Cloud Supabase & Sicurezza
+          </h3>
+        </div>
+        <img
+          src="/saggin-logo.png"
+          alt="Saggin"
+          className="h-7 w-auto object-contain bg-white rounded px-1.5 py-0.5 hidden sm:block"
+        />
+      </div>
+
       {/* Settings Navigation Tabs */}
       <div className="flex border-b border-slate-200 bg-slate-50 px-4 overflow-x-auto no-scrollbar">
         <button
           onClick={() => setActiveTab('company')}
-          className={`py-3 px-3.5 text-xs font-bold border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
+          className={`py-3.5 px-4 text-xs font-extrabold border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
             activeTab === 'company'
-              ? 'border-blue-600 text-blue-600 bg-white'
+              ? 'border-red-600 text-red-600 bg-white'
               : 'border-transparent text-slate-600 hover:text-slate-900'
           }`}
         >
@@ -114,9 +131,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         <button
           onClick={() => setActiveTab('supabase')}
-          className={`py-3 px-3.5 text-xs font-bold border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
+          className={`py-3.5 px-4 text-xs font-extrabold border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
             activeTab === 'supabase'
-              ? 'border-blue-600 text-blue-600 bg-white'
+              ? 'border-red-600 text-red-600 bg-white'
               : 'border-transparent text-slate-600 hover:text-slate-900'
           }`}
         >
@@ -126,9 +143,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         <button
           onClick={() => setActiveTab('sql')}
-          className={`py-3 px-3.5 text-xs font-bold border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
+          className={`py-3.5 px-4 text-xs font-extrabold border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
             activeTab === 'sql'
-              ? 'border-blue-600 text-blue-600 bg-white'
+              ? 'border-red-600 text-red-600 bg-white'
               : 'border-transparent text-slate-600 hover:text-slate-900'
           }`}
         >
@@ -138,9 +155,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         <button
           onClick={() => setActiveTab('passwords')}
-          className={`py-3 px-3.5 text-xs font-bold border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
+          className={`py-3.5 px-4 text-xs font-extrabold border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
             activeTab === 'passwords'
-              ? 'border-blue-600 text-blue-600 bg-white'
+              ? 'border-red-600 text-red-600 bg-white'
               : 'border-transparent text-slate-600 hover:text-slate-900'
           }`}
         >
@@ -150,14 +167,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         <button
           onClick={() => setActiveTab('ionos')}
-          className={`py-3 px-3.5 text-xs font-bold border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
+          className={`py-3.5 px-4 text-xs font-extrabold border-b-2 flex items-center gap-2 whitespace-nowrap transition ${
             activeTab === 'ionos'
-              ? 'border-blue-600 text-blue-600 bg-white'
+              ? 'border-red-600 text-red-600 bg-white'
               : 'border-transparent text-slate-600 hover:text-slate-900'
           }`}
         >
           <Globe className="w-4 h-4" />
-          <span>Guida IONOS & Pubblicazione</span>
+          <span>Guida Hosting & Pubblicazione</span>
         </button>
       </div>
 
@@ -255,7 +272,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="pt-2 flex items-center gap-3">
             <button
               type="submit"
-              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition"
+              className="px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition"
             >
               <Save className="w-4 h-4" />
               <span>Salva Dati Aziendali</span>
@@ -274,11 +291,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="p-6 space-y-5 max-w-2xl">
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
             <h4 className="text-xs font-bold text-slate-900 mb-1 flex items-center gap-1.5">
-              <Database className="w-4 h-4 text-blue-600" />
+              <Database className="w-4 h-4 text-red-600" />
               <span>Integrazione Supabase Cloud & Sincronizzazione Multi-Dispositivo</span>
             </h4>
             <p className="text-xs text-slate-600 leading-relaxed">
-              L'applicazione dispone già di <strong>sincronizzazione automatica in tempo reale</strong> tra tutti i computer dell'ufficio e gli smartphone del magazzino. Inserendo qui le credenziali <strong>Supabase</strong>, il catalogo e gli ordini vengono memorizzati anche sul cloud PostgreSQL permanente e condivisi istantaneamente con tutti i telefoni.
+              L'applicazione dispone già di <strong>sincronizzazione automatica in tempo reale</strong> tra tutti i computer dell'ufficio e i terminali/tablet del magazzino. Inserendo qui le credenziali <strong>Supabase</strong>, il catalogo e gli ordini vengono memorizzati sul cloud PostgreSQL permanente e condivisi istantaneamente con tutti i dispositivi.
             </p>
           </div>
 
@@ -292,7 +309,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 placeholder="https://xyzcompany.supabase.co"
                 value={supabaseUrl}
                 onChange={(e) => setSupabaseUrl(e.target.value)}
-                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
               />
             </div>
 
@@ -305,7 +322,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
                 value={supabaseKey}
                 onChange={(e) => setSupabaseKey(e.target.value)}
-                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-red-500"
               />
             </div>
           </div>
@@ -331,7 +348,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <button
               onClick={handleSaveSupabase}
               disabled={isTesting}
-              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition"
+              className="px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm active:scale-95 transition"
             >
               <Server className="w-4 h-4" />
               <span>{isTesting ? 'Verifica Connessione...' : 'Salva e Testa Connessione'}</span>

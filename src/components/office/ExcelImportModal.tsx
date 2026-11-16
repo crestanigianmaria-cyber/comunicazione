@@ -86,17 +86,19 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-white w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] border border-slate-200">
+        {/* Top Crimson Accent */}
+        <div className="h-1.5 w-full bg-gradient-to-r from-red-700 via-red-600 to-red-700" />
         {/* Header */}
-        <div className="p-4 sm:p-5 bg-slate-950 text-white flex items-center justify-between border-b border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white">
+        <div className="p-4 sm:p-5 bg-[#0b0f19] text-white flex items-center justify-between border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-red-600 flex items-center justify-center text-white shadow-sm">
               <FileSpreadsheet className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-extrabold text-white">
-                Importazione Catalogo Articoli Excel
+              <h3 className="text-base font-black text-white tracking-tight">
+                Importazione ed Esportazione Anagrafica Excel
               </h3>
               <p className="text-[11px] text-slate-400">
                 Struttura colonne: Col. A (Codice), Col. B (Descrizione), Col. UM (UM), Col. N (Cod. Alternativo)
@@ -114,22 +116,22 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
         {/* Action helper bar: Download template / Export current */}
         <div className="p-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
           <div className="flex items-center gap-1.5 text-slate-600 font-medium">
-            <Info className="w-4 h-4 text-blue-600 shrink-0" />
+            <Info className="w-4 h-4 text-red-600 shrink-0" />
             <span>Gli articoli non presenti nel file NON verranno cancellati (conservazione storico).</span>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={() => downloadSampleExcel()}
-              className="px-2.5 py-1 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-[11px] font-bold flex items-center gap-1 shadow-sm transition"
+              className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-[11px] font-bold flex items-center gap-1 shadow-sm transition"
             >
               <Download className="w-3.5 h-3.5 text-emerald-600" />
               <span>Scarica Modello ARTICOLI.xlsx</span>
             </button>
             <button
               onClick={() => exportCatalogToExcel(products)}
-              className="px-2.5 py-1 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-[11px] font-bold flex items-center gap-1 shadow-sm transition"
+              className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-[11px] font-bold flex items-center gap-1 shadow-sm transition"
             >
-              <FileDown className="w-3.5 h-3.5 text-blue-600" />
+              <FileDown className="w-3.5 h-3.5 text-red-600" />
               <span>Esporta Catalogo Attuale ({products.length})</span>
             </button>
           </div>
@@ -143,7 +145,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
               onDragOver={(e) => e.preventDefault()}
               onDrop={handleDrop}
               onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-2xl p-6 text-center cursor-pointer bg-slate-50/70 hover:bg-blue-50/30 transition flex flex-col items-center justify-center group"
+              className="border-2 border-dashed border-slate-300 hover:border-red-500 rounded-xl p-6 text-center cursor-pointer bg-slate-50/70 hover:bg-red-50/20 transition flex flex-col items-center justify-center group"
             >
               <input
                 ref={fileInputRef}
@@ -152,10 +154,10 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                 onChange={handleFileChange}
                 className="hidden"
               />
-              <div className="w-12 h-12 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center mb-2 group-hover:scale-105 transition">
+              <div className="w-12 h-12 rounded-xl bg-red-50 border border-red-100 text-red-600 flex items-center justify-center mb-2 group-hover:scale-105 transition">
                 <Upload className="w-6 h-6" />
               </div>
-              <p className="text-sm font-bold text-slate-800">
+              <p className="text-sm font-extrabold text-slate-900">
                 {file ? file.name : 'Seleziona o trascina qui il file Excel ARTICOLI.xlsx'}
               </p>
               <p className="text-xs text-slate-500 mt-1">
@@ -167,7 +169,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
           {/* Loading analysis */}
           {isAnalyzing && (
             <div className="py-6 text-center text-xs font-semibold text-slate-600 flex items-center justify-center gap-2">
-              <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
+              <RefreshCw className="w-4 h-4 animate-spin text-red-600" />
               <span>Analisi struttura foglio e convalida colonne in corso...</span>
             </div>
           )}
@@ -303,7 +305,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
             <button
               onClick={handleConfirmImport}
               disabled={isImporting || summary.validRowsCount === 0}
-              className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-extrabold flex items-center gap-2 shadow-lg shadow-blue-600/20 active:scale-95 transition"
+              className="px-5 py-2.5 rounded-lg bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-extrabold flex items-center gap-2 shadow-lg shadow-red-600/20 active:scale-95 transition"
             >
               {isImporting ? (
                 <>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Smartphone, Building2, Lock, ArrowRight, KeyRound } from 'lucide-react';
+import { Smartphone, Building2, Lock, ArrowRight, ShieldCheck, Warehouse } from 'lucide-react';
 import { UserRole } from '../../types';
 import { signInRole } from '../../services/db';
 
@@ -23,7 +23,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
       await signInRole(selectedRole, password);
       onLoginSuccess(selectedRole);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Accesso non riuscito. Riprova.');
+      setError(err instanceof Error ? err.message : 'Accesso non riuscito. Verifica le credenziali.');
     } finally {
       setIsLoading(false);
     }
@@ -35,105 +35,137 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
     setError(null);
   };
 
-
-
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col justify-center items-center px-4 py-8 select-none">
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-200">
-        {/* Header Banner */}
-        <div className="bg-slate-950 p-6 text-white text-center border-b border-slate-800">
-          <div className="w-28 h-16 bg-white rounded-xl mx-auto flex items-center justify-center mb-3 p-2 shadow-lg shadow-black/10">
-            <img
-              src="/saggin-logo.png"
-              alt="Logo Saggin"
-              className="w-full h-full object-contain"
-              width="112"
-              height="64"
-              fetchPriority="high"
-            />
+    <div className="min-h-screen bg-[#0b0f19] flex flex-col justify-center items-center px-4 py-8 select-none">
+      {/* Subtle top corporate bar */}
+      <div className="fixed top-0 left-0 right-0 h-1 bg-red-600 z-50" />
+
+      <div className="w-full max-w-[440px] bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-800/40">
+        {/* Corporate Identity Header */}
+        <div className="bg-[#0f172a] px-6 py-6 text-white border-b border-slate-800 relative">
+          <div className="flex items-center gap-4">
+            <div className="w-20 h-14 bg-white rounded-xl flex items-center justify-center p-2 shadow-md shrink-0 border border-slate-200">
+              <img
+                src="/saggin-logo.png"
+                alt="Saggin Guglielmo S.R.L."
+                className="w-full h-full object-contain"
+                width="80"
+                height="56"
+                fetchPriority="high"
+              />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono font-bold uppercase tracking-widest px-2 py-0.5 rounded bg-red-600 text-white">
+                  DAL 1957
+                </span>
+                <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">
+                  ERP · WMS
+                </span>
+              </div>
+              <h1 className="text-lg sm:text-xl font-extrabold tracking-tight text-white mt-1 truncate">
+                SAGGIN GUGLIELMO S.R.L.
+              </h1>
+              <p className="text-[11px] text-slate-400 font-medium">
+                Materiali Edili & Ferramenta · Nove · Marostica
+              </p>
+            </div>
           </div>
-          <h1 className="text-xl font-extrabold tracking-tight">Gestione Magazzino</h1>
-          <p className="text-xs text-slate-400 mt-1">
-            Seleziona la tua postazione per accedere al sistema
-          </p>
         </div>
 
-        {/* Role Selector Tabs */}
-        <div className="p-6">
-          <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
-            Ruolo di Accesso
-          </label>
+        {/* Role Selection & Credentials */}
+        <div className="p-6 sm:p-7">
+          <div className="flex items-center justify-between mb-2.5">
+            <label className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider">
+              Seleziona Postazione Operativa
+            </label>
+            <span className="text-[10px] font-mono text-slate-400">
+              {selectedRole === 'magazzino' ? 'TOUCH / TABLET' : 'DESKTOP PC'}
+            </span>
+          </div>
+
           <div className="grid grid-cols-2 gap-3 mb-6">
             <button
               type="button"
               onClick={() => handleRoleSelect('magazzino')}
-              className={`p-4 rounded-xl border text-left transition-all ${
+              className={`p-4 rounded-xl border-2 text-left transition-all touch-manipulation ${
                 selectedRole === 'magazzino'
-                  ? 'border-blue-600 bg-blue-50/50 shadow-sm ring-2 ring-blue-500/20'
-                  : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                  ? 'border-red-600 bg-red-50/40 shadow-xs'
+                  : 'border-slate-200 bg-slate-50/60 hover:border-slate-300 hover:bg-white'
               }`}
             >
-              <div className="flex items-center justify-between mb-2">
-                <Smartphone className={`w-5 h-5 ${selectedRole === 'magazzino' ? 'text-blue-600' : 'text-slate-500'}`} />
-                {selectedRole === 'magazzino' && (
-                  <span className="w-2 h-2 rounded-full bg-blue-600" />
-                )}
+              <div className="flex items-center justify-between mb-2.5">
+                <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+                  selectedRole === 'magazzino' ? 'bg-red-600 text-white' : 'bg-slate-200/80 text-slate-600'
+                }`}>
+                  <Warehouse className="w-5 h-5" />
+                </div>
+                <span className={`w-2.5 h-2.5 rounded-full ${
+                  selectedRole === 'magazzino' ? 'bg-red-600 ring-4 ring-red-600/15' : 'bg-slate-300'
+                }`} />
               </div>
-              <div className="font-bold text-sm text-slate-900">Magazzino</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">Operatori Smartphone</div>
+              <div className="font-extrabold text-sm text-slate-900">Magazzino</div>
+              <div className="text-[11px] text-slate-500 mt-0.5 leading-tight">
+                Piazzale · Mobile & Tablet
+              </div>
             </button>
 
             <button
               type="button"
               onClick={() => handleRoleSelect('ufficio')}
-              className={`p-4 rounded-xl border text-left transition-all ${
+              className={`p-4 rounded-xl border-2 text-left transition-all touch-manipulation ${
                 selectedRole === 'ufficio'
-                  ? 'border-blue-600 bg-blue-50/50 shadow-sm ring-2 ring-blue-500/20'
-                  : 'border-slate-200 hover:border-slate-300 hover:bg-slate-50'
+                  ? 'border-slate-900 bg-slate-900/[0.03] shadow-xs'
+                  : 'border-slate-200 bg-slate-50/60 hover:border-slate-300 hover:bg-white'
               }`}
             >
-              <div className="flex items-center justify-between mb-2">
-                <Building2 className={`w-5 h-5 ${selectedRole === 'ufficio' ? 'text-blue-600' : 'text-slate-500'}`} />
-                {selectedRole === 'ufficio' && (
-                  <span className="w-2 h-2 rounded-full bg-blue-600" />
-                )}
+              <div className="flex items-center justify-between mb-2.5">
+                <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${
+                  selectedRole === 'ufficio' ? 'bg-slate-900 text-white' : 'bg-slate-200/80 text-slate-600'
+                }`}>
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <span className={`w-2.5 h-2.5 rounded-full ${
+                  selectedRole === 'ufficio' ? 'bg-slate-900 ring-4 ring-slate-900/15' : 'bg-slate-300'
+                }`} />
               </div>
-              <div className="font-bold text-sm text-slate-900">Ufficio</div>
-              <div className="text-[11px] text-slate-500 mt-0.5">Dashboard Computer</div>
+              <div className="font-extrabold text-sm text-slate-900">Ufficio</div>
+              <div className="text-[11px] text-slate-500 mt-0.5 leading-tight">
+                Amministrazione · PC
+              </div>
             </button>
           </div>
 
-          {/* Form */}
+          {/* Password Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-bold text-slate-700">
-                  {selectedRole === 'magazzino' ? 'Password Magazzino' : 'Password Amministrativa Ufficio'}
-                </label>
-
-              </div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                {selectedRole === 'magazzino'
+                  ? 'Codice / Password Operatore Magazzino'
+                  : 'Password Amministrazione Ufficio'}
+              </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
                   <Lock className="w-4 h-4" />
                 </div>
                 <input
-                  type={selectedRole === 'magazzino' ? 'password' : 'password'}
+                  type="password"
                   inputMode="text"
                   autoCapitalize="none"
                   autoComplete="current-password"
                   spellCheck={false}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={selectedRole === 'magazzino' ? 'Inserisci password Magazzino' : 'Inserisci password ufficio'}
+                  placeholder={selectedRole === 'magazzino' ? 'Inserisci credenziale magazzino...' : 'Inserisci password ufficio...'}
                   required
                   autoFocus
-                  className="w-full pl-9 pr-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                  className="w-full h-12 pl-10 pr-4 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/15 focus:border-slate-900 transition"
                 />
               </div>
             </div>
 
             {error && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-semibold text-red-600 flex items-start gap-2">
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-bold text-red-700 flex items-center gap-2">
                 <span>{error}</span>
               </div>
             )}
@@ -141,20 +173,28 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
             <button
               type="submit"
               disabled={isLoading || !password}
-              className="w-full h-11 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-lg shadow-slate-900/10 active:scale-[0.98] transition"
+              className={`w-full h-12 disabled:opacity-45 text-white rounded-xl text-sm font-extrabold flex items-center justify-center gap-2 shadow-md active:scale-[0.99] transition touch-manipulation ${
+                selectedRole === 'magazzino'
+                  ? 'bg-red-600 hover:bg-red-700 shadow-red-600/15'
+                  : 'bg-slate-900 hover:bg-slate-800 shadow-slate-900/15'
+              }`}
             >
-              <span>{isLoading ? 'Verifica in corso...' : 'Entra nel Sistema'}</span>
+              <span>{isLoading ? 'Autenticazione in corso...' : `Accedi a ${selectedRole === 'magazzino' ? 'Magazzino' : 'Ufficio'}`}</span>
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
 
-          {/* Security note */}
-          <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-center gap-1.5 text-[11px] text-slate-400">
-            <KeyRound className="w-3.5 h-3.5" />
-            <span>Credenziali modificabili dal pannello Impostazioni Ufficio</span>
+          {/* Footer info */}
+          <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+            <span className="inline-flex items-center gap-1.5 font-medium">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+              Sincronizzazione Cloud Supabase
+            </span>
+            <span className="font-mono text-[10px]">v2.4 ERP</span>
           </div>
         </div>
       </div>
     </div>
   );
 };
+
