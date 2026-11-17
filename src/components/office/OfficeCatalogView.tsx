@@ -8,13 +8,18 @@ import {
   Trash2,
   AlertTriangle,
   X,
-  QrCode
+  QrCode,
+  CheckSquare,
+  Square,
+  Printer,
+  Sparkles
 } from 'lucide-react';
 import { Product, CompanySettings } from '../../types';
 import { searchProducts } from '../../lib/search';
 import { downloadSampleExcel, exportCatalogToExcel } from '../../services/excel';
 import { clearAllProducts } from '../../services/db';
 import { ProductQrModal } from './ProductQrModal';
+import { BatchQrPrintModal } from './BatchQrPrintModal';
 
 interface OfficeCatalogViewProps {
   products: Product[];
@@ -30,10 +35,66 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [selectedQrProduct, setSelectedQrProduct] = useState<Product | null>(null);
+  const [selectedProductCodes, setSelectedProductCodes] = useState<Set<string>>(new Set());
+  const [showBatchModal, setShowBatchModal] = useState(false);
 
   const filteredProducts = useMemo(() => {
     return searchProducts(products, searchQuery, 500);
   }, [products, searchQuery]);
+
+  // Quick preset selections
+  const handleSelectQuickFilter = (type: 'acciai' | 'mapei' | 'all-filtered' | 'clear') => {
+    if (type === 'clear') {
+      setSelectedProductCodes(new Set());
+      return;
+    }
+    if (type === 'all-filtered') {
+      setSelectedProductCodes(new Set(filteredProducts.map(p => p.code)));
+      return;
+    }
+    if (type === 'acciai') {
+      const matched = products.filter(p => {
+        const text = (p.description + ' ' + p.code + ' ' + (p.alternative_code || '')).toLowerCase();
+        return (
+          text.includes('acc') ||
+          text.includes('tubo') ||
+          text.includes('curva') ||
+          text.includes('ferro') ||
+          text.includes('rete elettrosaldata') ||
+          text.includes('trave') ||
+          text.includes('scatolare') ||
+          text.includes('tondo')
+        );
+      });
+      setSelectedProductCodes(new Set(matched.map(p => p.code)));
+      return;
+    }
+    if (type === 'mapei') {
+      const matched = products.filter(p => {
+        const text = (p.description + ' ' + p.code + ' ' + (p.alternative_code || '')).toLowerCase();
+        return text.includes('mapei') || text.includes('keraflex');
+      });
+      setSelectedProductCodes(new Set(matched.map(p => p.code)));
+      return;
+    }
+  };
+
+  const toggleSelectProduct = (code: string) => {
+    setSelectedProductCodes(prev => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code);
+      else next.add(code);
+      return next;
+    });
+  };
+
+  const selectedProductsList = useMemo(() => {
+    if (selectedProductCodes.size === 0) return [];
+    const codeMap = new Map(products.map(p => [p.code, p]));
+    return Array.from(selectedProductCodes)
+      .map(code => codeMap.get(code))
+      .filter((p): p is Product => Boolean(p));
+  }, [products, selectedProductCodes]);
 
   const handleClearConfirm = async () => {
     await clearAllProducts();
@@ -60,6 +121,24 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {products.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowBatchModal(true)}
+              className={`px-3.5 py-2 rounded-lg text-xs font-black flex items-center gap-2 transition shadow-sm ${
+                selectedProductCodes.size > 0
+                  ? 'bg-slate-900 text-white hover:bg-slate-800 ring-2 ring-red-600'
+                  : 'bg-white hover:bg-slate-100 border border-slate-300 text-slate-800'
+              }`}
+              title="Apri il generatore di etichette QR A4 con logo e dimensioni personalizzabili"
+            >
+              <Printer className="w-4 h-4 text-red-600 stroke-[2.5]" />
+              <span>
+                Stampa QR Multipli {selectedProductCodes.size > 0 ? `(${selectedProductCodes.size})` : ''}
+              </span>
+            </button>
+          )}
+
           {products.length > 0 && (
             <button
               type="button"
@@ -136,10 +215,10 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
         </div>
       )}
 
-      {/* Catalog Search & Table Card */}
+      {/* Catalog Search, Multi-Select Toolbar & Table Card */}
       <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
-        {/* Search Input Bar */}
-        <div className="p-4 border-b border-slate-200 bg-slate-50/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        {/* Search Input Bar + Quick Selection Buttons */}
+        <div className="p-3 sm:p-4 border-b border-slate-200 bg-slate-50/50 flex flex-col md:flex-row md:items-center justify-between gap-3">
           <div className="relative flex-1 max-w-md">
             <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
               <Search className="w-4 h-4" />
@@ -161,10 +240,68 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
               </button>
             )}
           </div>
-          <span className="text-[11px] font-mono text-slate-500">
-            Visualizzati: <strong>{filteredProducts.length}</strong> di {products.length}
-          </span>
+
+          {/* Quick Filter Selection Chips & Actions */}
+          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 mr-1">
+              Seleziona Rapido:
+            </span>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickFilter('acciai')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-slate-100 border border-slate-300 font-bold text-slate-700 text-[11px] transition"
+              title="Seleziona tutti gli acciai (tubi, curve, travi, tondi c.a., reti)"
+            >
+              🔩 Tutti Acciai
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickFilter('mapei')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-slate-100 border border-slate-300 font-bold text-slate-700 text-[11px] transition"
+              title="Seleziona tutti gli articoli Mapei"
+            >
+              🏗️ Tutti Mapei
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSelectQuickFilter('all-filtered')}
+              className="px-2.5 py-1 rounded-md bg-white hover:bg-slate-100 border border-slate-300 font-bold text-slate-700 text-[11px] transition"
+            >
+              Seleziona Filtrati ({filteredProducts.length})
+            </button>
+            {selectedProductCodes.size > 0 && (
+              <button
+                type="button"
+                onClick={() => handleSelectQuickFilter('clear')}
+                className="px-2 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-700 font-mono font-black text-[11px] transition"
+              >
+                Deseleziona ({selectedProductCodes.size})
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Selected Banner (Sticky trigger for print) */}
+        {selectedProductCodes.size > 0 && (
+          <div className="px-4 py-2.5 bg-slate-900 text-white flex items-center justify-between gap-3 text-xs animate-in fade-in">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-bold">
+                {selectedProductCodes.size} {selectedProductCodes.size === 1 ? 'articolo selezionato' : 'articoli selezionati'} per la stampa
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowBatchModal(true)}
+                className="px-3.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 font-black text-white text-xs flex items-center gap-1.5 transition shadow-xs"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Apri Impaginatore A4 ({selectedProductCodes.size})</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Products Table */}
         {filteredProducts.length === 0 ? (
@@ -180,7 +317,29 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-100/80 border-b border-slate-200 text-[10px] font-mono font-extrabold text-slate-500 uppercase tracking-wider">
-                  <th className="py-3 px-4 w-12 text-center">#</th>
+                  <th className="py-3 px-3 w-10 text-center">
+                    <input
+                      type="checkbox"
+                      checked={
+                        filteredProducts.length > 0 &&
+                        filteredProducts.every((p) => selectedProductCodes.has(p.code))
+                      }
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          handleSelectQuickFilter('all-filtered');
+                        } else {
+                          setSelectedProductCodes((prev) => {
+                            const next = new Set(prev);
+                            filteredProducts.forEach((p) => next.delete(p.code));
+                            return next;
+                          });
+                        }
+                      }}
+                      className="w-4 h-4 accent-red-600 rounded cursor-pointer"
+                      title="Seleziona o deseleziona tutti gli articoli visualizzati"
+                    />
+                  </th>
+                  <th className="py-3 px-3 w-12 text-center">#</th>
                   <th className="py-3 px-4 w-40">Codice Articolo (Col. A)</th>
                   <th className="py-3 px-4">Descrizione Materiale (Col. B)</th>
                   <th className="py-3 px-4 w-40">Cod. Alternativo (Col. N)</th>
@@ -189,52 +348,109 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200/70">
-                {filteredProducts.map((p, idx) => (
-                  <tr key={p.code} className="hover:bg-slate-50/90 transition">
-                    <td className="py-2.5 px-4 text-center text-slate-400 font-mono">
-                      {idx + 1}
-                    </td>
-                    <td className="py-2.5 px-4">
-                      <span className="font-mono font-black text-xs bg-slate-900 text-white px-2.5 py-0.5 rounded">
-                        {p.code}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-4 font-bold text-slate-900">
-                      {p.description}
-                    </td>
-                    <td className="py-2.5 px-4 font-mono text-slate-500">
-                      {p.alternative_code || '—'}
-                    </td>
-                    <td className="py-2.5 px-4 text-center">
-                      <span className="font-mono font-extrabold text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 uppercase">
-                        {p.unit_of_measure}
-                      </span>
-                    </td>
-                    <td className="py-2.5 px-4 text-center">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedQrProduct(p)}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-red-600 hover:text-white text-slate-700 font-mono text-[11px] font-bold border border-slate-200 transition"
-                        title={`Genera e stampa etichetta QR Code per ${p.code}`}
+                {filteredProducts.map((p, idx) => {
+                  const isSelected = selectedProductCodes.has(p.code);
+                  return (
+                    <tr
+                      key={p.code}
+                      onClick={() => toggleSelectProduct(p.code)}
+                      className={`cursor-pointer transition select-none ${
+                        isSelected
+                          ? 'bg-red-50/70 hover:bg-red-50'
+                          : 'hover:bg-slate-50/90'
+                      }`}
+                    >
+                      <td
+                        className="py-2.5 px-3 text-center"
+                        onClick={(e) => e.stopPropagation()}
                       >
-                        <QrCode className="w-3.5 h-3.5" />
-                        <span>QR Stampa</span>
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelectProduct(p.code)}
+                          className="w-4 h-4 accent-red-600 rounded cursor-pointer"
+                        />
+                      </td>
+                      <td className="py-2.5 px-3 text-center text-slate-400 font-mono">
+                        {idx + 1}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <span className="font-mono font-black text-xs bg-slate-900 text-white px-2.5 py-0.5 rounded">
+                          {p.code}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-4 font-bold text-slate-900">
+                        {p.description}
+                      </td>
+                      <td className="py-2.5 px-4 font-mono text-slate-500">
+                        {p.alternative_code || '—'}
+                      </td>
+                      <td className="py-2.5 px-4 text-center">
+                        <span className="font-mono font-extrabold text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 uppercase">
+                          {p.unit_of_measure}
+                        </span>
+                      </td>
+                      <td
+                        className="py-2.5 px-4 text-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setSelectedQrProduct(p)}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-red-600 hover:text-white text-slate-700 font-mono text-[11px] font-bold border border-slate-200 transition"
+                          title={`Genera e stampa etichetta singola per ${p.code}`}
+                        >
+                          <QrCode className="w-3.5 h-3.5" />
+                          <span>QR Singolo</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </div>
 
-      {/* QR Code Modal */}
+      {/* Single QR Code Modal */}
       {selectedQrProduct && (
         <ProductQrModal
           product={selectedQrProduct}
-          companySettings={companySettings || { companyName: 'SAGGIN', legalName: '', address: '', vatNumber: '', phone: '', email: '', notes: '' }}
+          companySettings={
+            companySettings || {
+              companyName: 'SAGGIN',
+              legalName: '',
+              address: '',
+              vatNumber: '',
+              phone: '',
+              email: '',
+              notes: '',
+            }
+          }
           onClose={() => setSelectedQrProduct(null)}
+        />
+      )}
+
+      {/* Batch QR Multi-Label Print & Layout Modal */}
+      {showBatchModal && (
+        <BatchQrPrintModal
+          products={
+            selectedProductsList.length > 0 ? selectedProductsList : filteredProducts
+          }
+          companySettings={
+            companySettings || {
+              companyName: 'SAGGIN',
+              legalName: '',
+              address: '',
+              vatNumber: '',
+              phone: '',
+              email: '',
+              notes: '',
+            }
+          }
+          onClose={() => setShowBatchModal(false)}
+          onClearSelection={() => setSelectedProductCodes(new Set())}
         />
       )}
     </div>
