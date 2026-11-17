@@ -145,8 +145,22 @@ export default function App() {
       setProducts(updatedProducts);
     });
 
+    // Background safety poll every 30s for the office terminal to guarantee fresh data even if Windows dropped WebSocket
+    let safetyPollTimer: ReturnType<typeof setInterval> | null = null;
+    if (currentRole === 'ufficio') {
+      safetyPollTimer = setInterval(() => {
+        if (typeof document !== 'undefined' && document.hidden) return;
+        void fetchOrders(true)
+          .then((fresh) => {
+            if (isMounted) setOrders(fresh);
+          })
+          .catch(() => {});
+      }, 30000);
+    }
+
     return () => {
       isMounted = false;
+      if (safetyPollTimer) clearInterval(safetyPollTimer);
       unsubOrders();
       unsubCatalog();
     };

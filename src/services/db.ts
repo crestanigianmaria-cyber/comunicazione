@@ -1001,8 +1001,37 @@ export function subscribeToOrders(callback: OrderListener): () => void {
     }
   }
 
+  // Automatic recovery for Windows sleep, app minimize, and network interruptions
+  const handleWakeOrFocus = () => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    // Check if channel was disconnected/closed during sleep and reconnect if needed
+    if (supabase && supabaseChannel) {
+      const state = (supabaseChannel as any).state;
+      if (state === 'closed' || state === 'errored') {
+        try {
+          supabaseChannel.subscribe();
+        } catch {
+          // Ignore
+        }
+      }
+    }
+    // Refresh orders immediately from cloud without waiting for manual reload
+    scheduleRealtimeRefresh();
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', handleWakeOrFocus);
+    window.addEventListener('online', handleWakeOrFocus);
+    document.addEventListener('visibilitychange', handleWakeOrFocus);
+  }
+
   return () => {
     orderListeners.delete(callback);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('focus', handleWakeOrFocus);
+      window.removeEventListener('online', handleWakeOrFocus);
+      document.removeEventListener('visibilitychange', handleWakeOrFocus);
+    }
     if (realtimeDebounceTimer) {
       clearTimeout(realtimeDebounceTimer);
     }
