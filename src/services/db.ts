@@ -983,6 +983,26 @@ export function getPendingOrdersCount(): number {
 
 let pendingSyncPromise: Promise<{ synced: number; remaining: number; errors: string[] }> | null = null;
 
+const UUID_EXACT_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID_EMBEDDED_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+function isValidUuid(val: unknown): val is string {
+  return typeof val === 'string' && UUID_EXACT_RE.test(val.trim());
+}
+
+function ensureUuid(val: unknown): string {
+  if (isValidUuid(val)) return val.trim();
+  if (typeof val === 'string') {
+    const match = val.match(UUID_EMBEDDED_RE);
+    if (match) return match[0];
+  }
+  return crypto.randomUUID();
+}
+
+function sanitizeNullableUuid(val: unknown): string | null {
+  return isValidUuid(val) ? val.trim() : null;
+}
+
 export function syncPendingOrders(): Promise<{ synced: number; remaining: number; errors: string[] }> {
   // A single shared promise prevents the online event, timer and manual button
   // from running the same queue concurrently.
@@ -1005,13 +1025,30 @@ export function syncPendingOrders(): Promise<{ synced: number; remaining: number
     const stillPending: Order[] = [];
     const errors: string[] = [];
 
-    for (const order of pending) {
+    for (const rawOrder of pending) {
       try {
-        if (!order.id || !Array.isArray(order.items) || order.items.length === 0) {
-          stillPending.push(order);
-          errors.push(`${order.order_number || order.id || 'Ordine'}: dati ordine incompleti; nessun dato è stato eliminato.`);
+        if (!rawOrder.id || !Array.isArray(rawOrder.items) || rawOrder.items.length === 0) {
+          stillPending.push(rawOrder);
+          errors.push(`${rawOrder.order_number || rawOrder.id || 'Ordine'}: dati ordine incompleti; nessun dato è stato eliminato.`);
           continue;
         }
+
+        // Sanitize legacy non-UUID IDs (e.g. "imp-M-<uuid>" from older versions)
+        // so Supabase UUID columns accept them cleanly.
+        const orderId = ensureUuid(rawOrder.id);
+        const usedItemIds = new Set<string>();
+        const sanitizedItems = rawOrder.items.map(it => {
+          let itemId = ensureUuid(it.id);
+          if (usedItemIds.has(itemId)) itemId = crypto.randomUUID();
+          usedItemIds.add(itemId);
+          return {
+            ...it,
+            id: itemId,
+            order_id: orderId,
+            product_id: sanitizeNullableUuid(it.product_id),
+          };
+        });
+        const order: Order = { ...rawOrder, id: orderId, items: sanitizedItems };
 
         // Keep the same ID on every retry. An empty number lets the database
         // trigger assign the canonical sequence when the header is first created.
@@ -1076,14 +1113,16 @@ export function syncPendingOrders(): Promise<{ synced: number; remaining: number
         // Keep the authoritative database number on this device as well.
         const updatedOrder = { ...order, order_number: savedHeader.order_number || order.order_number };
         const localOrders = getLocalOrders().map(local =>
-          local.id === order.id ? { ...local, order_number: updatedOrder.order_number } : local
+          local.id === rawOrder.id || local.id === order.id
+            ? { ...local, id: order.id, items: order.items, order_number: updatedOrder.order_number }
+            : local
         );
         saveLocalOrders(localOrders);
         synced++;
       } catch (error) {
-        stillPending.push(order);
+        stillPending.push(rawOrder);
         const message = error instanceof Error ? error.message : String(error);
-        errors.push(`${order.order_number || order.id}: ${message}`);
+        errors.push(`${rawOrder.order_number || rawOrder.id}: ${message}`);
       }
     }
 
