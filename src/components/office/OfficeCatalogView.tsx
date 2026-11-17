@@ -7,24 +7,29 @@ import {
   Package,
   Trash2,
   AlertTriangle,
-  X
+  X,
+  QrCode
 } from 'lucide-react';
-import { Product } from '../../types';
+import { Product, CompanySettings } from '../../types';
 import { searchProducts } from '../../lib/search';
 import { downloadSampleExcel, exportCatalogToExcel } from '../../services/excel';
 import { clearAllProducts } from '../../services/db';
+import { ProductQrModal } from './ProductQrModal';
 
 interface OfficeCatalogViewProps {
   products: Product[];
   onOpenExcelImport: () => void;
+  companySettings?: CompanySettings;
 }
 
 export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
   products,
   onOpenExcelImport,
+  companySettings,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [selectedQrProduct, setSelectedQrProduct] = useState<Product | null>(null);
 
   const filteredProducts = useMemo(() => {
     return searchProducts(products, searchQuery, 500);
@@ -175,11 +180,12 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-100/80 border-b border-slate-200 text-[10px] font-mono font-extrabold text-slate-500 uppercase tracking-wider">
-                  <th className="py-3 px-4 w-14 text-center">#</th>
-                  <th className="py-3 px-4 w-44">Codice Articolo (Col. A)</th>
+                  <th className="py-3 px-4 w-12 text-center">#</th>
+                  <th className="py-3 px-4 w-40">Codice Articolo (Col. A)</th>
                   <th className="py-3 px-4">Descrizione Materiale (Col. B)</th>
-                  <th className="py-3 px-4 w-44">Cod. Alternativo (Col. N)</th>
-                  <th className="py-3 px-4 w-24 text-center">U.M.</th>
+                  <th className="py-3 px-4 w-40">Cod. Alternativo (Col. N)</th>
+                  <th className="py-3 px-4 w-20 text-center">U.M.</th>
+                  <th className="py-3 px-4 w-28 text-center">Etichetta QR</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200/70">
@@ -204,6 +210,17 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
                         {p.unit_of_measure}
                       </span>
                     </td>
+                    <td className="py-2.5 px-4 text-center">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedQrProduct(p)}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-red-600 hover:text-white text-slate-700 font-mono text-[11px] font-bold border border-slate-200 transition"
+                        title={`Genera e stampa etichetta QR Code per ${p.code}`}
+                      >
+                        <QrCode className="w-3.5 h-3.5" />
+                        <span>QR Stampa</span>
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -211,6 +228,15 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* QR Code Modal */}
+      {selectedQrProduct && (
+        <ProductQrModal
+          product={selectedQrProduct}
+          companySettings={companySettings || { companyName: 'SAGGIN', legalName: '', address: '', vatNumber: '', phone: '', email: '', notes: '' }}
+          onClose={() => setSelectedQrProduct(null)}
+        />
+      )}
     </div>
   );
 };

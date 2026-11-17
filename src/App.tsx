@@ -77,6 +77,9 @@ export default function App() {
   // Role switch modal toggle
   const [showRoleModal, setShowRoleModal] = useState(false);
 
+  // Active order being edited/appended in WarehouseView
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+
   // Load shared data only after a valid Supabase session has been restored.
   useEffect(() => {
     if (!currentRole) return;
@@ -247,6 +250,9 @@ export default function App() {
             companySettings={companySettings}
             isOnline={isOnline}
             onOpenExcelModal={() => setShowExcelModal(true)}
+            editingOrder={editingOrder}
+            onCancelEditOrder={() => setEditingOrder(null)}
+            onOrderSaved={() => setEditingOrder(null)}
           />
         )}
 
@@ -260,6 +266,10 @@ export default function App() {
             onOpenExcelModal={() => {}}
             isHistoricView={true}
             readOnly={true}
+            onEditOrder={(order) => {
+              setEditingOrder(order);
+              setActiveView('magazzino');
+            }}
           />
         )}
 
@@ -276,6 +286,10 @@ export default function App() {
             onArchiveOrder={async (order) => {
               await archiveOrder(order.id);
               setOrders(await fetchOrders(true));
+            }}
+            onEditOrder={(order) => {
+              setEditingOrder(order);
+              setActiveView('magazzino');
             }}
           />
         )}
@@ -314,6 +328,7 @@ export default function App() {
         {activeView === 'ufficio_catalogo' && (
           <OfficeCatalogView
             products={products}
+            companySettings={companySettings}
             onOpenExcelImport={() => setShowExcelModal(true)}
           />
         )}

@@ -34,6 +34,7 @@ interface OfficeDashboardProps {
   readOnly?: boolean;
   onArchiveOrder?: (order: Order) => Promise<void>;
   onRestoreOrder?: (order: Order) => Promise<void>;
+  onEditOrder?: (order: Order) => void;
 }
 
 export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
@@ -48,6 +49,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
   readOnly = false,
   onArchiveOrder,
   onRestoreOrder,
+  onEditOrder,
 }) => {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [printOrder, setPrintOrder] = useState<Order | null>(null);
@@ -813,6 +815,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
           onOrderUpdated={(updated) => setSelectedOrder(updated)}
           onOpenPrint={(ord) => setPrintOrder(ord)}
           readOnly={readOnly || isTrashView}
+          onEditOrder={onEditOrder}
         />
       )}
 

@@ -7,7 +7,8 @@ import {
   Copy,
   FileText,
   Warehouse,
-  AlignLeft
+  AlignLeft,
+  Edit3
 } from 'lucide-react';
 import { Order, OrderStatus, CompanySettings, ORDER_DOCUMENT_LABELS } from '../../types';
 import { updateOrderStatus } from '../../services/db';
@@ -19,6 +20,7 @@ interface OrderDetailModalProps {
   onOrderUpdated: (updated: Order) => void;
   onOpenPrint: (order: Order) => void;
   readOnly?: boolean;
+  onEditOrder?: (order: Order) => void;
 }
 
 export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
@@ -28,6 +30,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
   onOrderUpdated,
   onOpenPrint,
   readOnly = false,
+  onEditOrder,
 }) => {
   const [currentOrder, setCurrentOrder] = useState<Order>(order);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -132,6 +135,20 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
               {copiedAll ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
               <span className="hidden md:inline">{copiedAll ? 'Righe Copiate!' : 'Copia Righe'}</span>
             </button>
+            {onEditOrder && !readOnly && currentOrder.status !== 'COMPLETATO' && (
+              <button
+                type="button"
+                onClick={() => {
+                  onEditOrder(currentOrder);
+                  onClose();
+                }}
+                className="px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-xs font-black text-slate-950 flex items-center gap-1.5 transition shadow-xs"
+                title="Riapri l'ordine al magazzino per aggiungere o modificare articoli"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Modifica / Aggiungi</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onOpenPrint(currentOrder)}

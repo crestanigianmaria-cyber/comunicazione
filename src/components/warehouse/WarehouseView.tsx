@@ -18,11 +18,14 @@ import {
   AlignLeft,
   Delete,
   Warehouse,
-  Hash
+  Hash,
+  Camera,
+  Edit3
 } from 'lucide-react';
-import { Product, CompanySettings, OrderDocumentType, ORDER_DOCUMENT_LABELS, WarehouseLocation } from '../../types';
+import { Product, CompanySettings, OrderDocumentType, ORDER_DOCUMENT_LABELS, WarehouseLocation, Order } from '../../types';
 import { searchProducts } from '../../lib/search';
-import { createNewOrder, fetchProductUnitOptions, saveProductUnitOption } from '../../services/db';
+import { createNewOrder, updateExistingOrder, fetchProductUnitOptions, saveProductUnitOption } from '../../services/db';
+import { BarcodeScannerModal } from './BarcodeScannerModal';
 
 interface CartItem {
   id: string;
@@ -39,6 +42,9 @@ interface WarehouseViewProps {
   isOnline: boolean;
   isProductsLoading?: boolean;
   onOpenExcelModal?: () => void;
+  editingOrder?: Order | null;
+  onCancelEditOrder?: () => void;
+  onOrderSaved?: (order: Order) => void;
 }
 
 const DRAFT_STORAGE_KEY = 'magazzino_active_draft_v1';
@@ -76,11 +82,17 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   companySettings,
   isOnline,
   isProductsLoading = false,
+  editingOrder = null,
+  onCancelEditOrder,
+  onOrderSaved,
 }) => {
   const initialDraft = useMemo(() => loadSavedDraft(), []);
 
-  const [customerReference, setCustomerReference] = useState(() => initialDraft.customerReference || '');
+  const [customerReference, setCustomerReference] = useState(() =>
+    editingOrder ? editingOrder.customer_reference || '' : initialDraft.customerReference || ''
+  );
   const [warehouseLocation, setWarehouseLocation] = useState<WarehouseLocation>(() => {
+    if (editingOrder?.warehouse_location) return editingOrder.warehouse_location;
     try {
       return (localStorage.getItem('saggin_warehouse_location') as WarehouseLocation) || 'MAGAZZINO';
     } catch {
@@ -89,10 +101,45 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   });
   const [unitOptions, setUnitOptions] = useState<Record<string, string[]>>({});
   const [newUnitDraft, setNewUnitDraft] = useState<Record<string, string>>({});
-  const [documentType, setDocumentType] = useState<OrderDocumentType | null>(() => initialDraft.documentType || null);
+  const [documentType, setDocumentType] = useState<OrderDocumentType | null>(() =>
+    editingOrder ? editingOrder.document_type || 'DDT' : initialDraft.documentType || null
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
-  const [cart, setCart] = useState<CartItem[]>(() => Array.isArray(initialDraft.cart) ? initialDraft.cart : []);
+
+  // Initialize cart from editingOrder items or draft
+  const [cart, setCart] = useState<CartItem[]>(() => {
+    if (editingOrder?.items && editingOrder.items.length > 0) {
+      return editingOrder.items.map(it => {
+        if (it.line_type === 'DESCRIPTION') {
+          return {
+            id: it.id || `desc-${Math.random()}`,
+            isDescription: true,
+            description: it.manual_description || it.product_description_snapshot,
+            quantity: 0,
+          };
+        }
+        // Match product from catalog by code if available
+        const matched = products.find(p => p.code === it.product_code_snapshot);
+        return {
+          id: it.id || it.product_code_snapshot,
+          product: matched || {
+            id: it.product_id || it.product_code_snapshot,
+            code: it.product_code_snapshot,
+            description: it.product_description_snapshot,
+            unit_of_measure: it.unit_of_measure_snapshot,
+            alternative_code: it.alternative_code_snapshot,
+            created_at: '',
+            updated_at: '',
+          },
+          quantity: it.quantity,
+          unitOfMeasure: it.unit_of_measure_snapshot,
+        };
+      });
+    }
+    return Array.isArray(initialDraft.cart) ? initialDraft.cart : [];
+  });
+
   const [recentCodes, setRecentCodes] = useState<string[]>(() => loadRecentCodes());
   const [showDescriptionEditor, setShowDescriptionEditor] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState('');
@@ -100,6 +147,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [submittedOrderNumber, setSubmittedOrderNumber] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [showScannerModal, setShowScannerModal] = useState(false);
 
   // Dedicated Mobile & Tablet Touch Quick Quantity Pad Modal
   const [editingItem, setEditingItem] = useState<CartItem | null>(null);
@@ -320,7 +368,35 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     setShowDescriptionEditor(false);
   };
 
-  // Order submission
+  // Handle scanned barcode / QR code
+  const handleBarcodeScanned = (decodedText: string) => {
+    triggerHaptic();
+    const cleanText = decodedText.trim();
+    // 1. Try exact code match
+    let matched = products.find(p => p.code.toLowerCase() === cleanText.toLowerCase());
+    // 2. Try alternative code (barcode/EAN) match
+    if (!matched) {
+      matched = products.find(p => p.alternative_code && p.alternative_code.toLowerCase() === cleanText.toLowerCase());
+    }
+    // 3. Try partial code match if length is relevant
+    if (!matched && cleanText.length >= 3) {
+      matched = products.find(p => p.code.toLowerCase().includes(cleanText.toLowerCase()));
+    }
+
+    if (matched) {
+      // Auto-set default document type to DDT if not set yet
+      if (!documentType) {
+        setDocumentType('DDT');
+      }
+      handleAddProduct(matched);
+      setSearchQuery('');
+    } else {
+      // Set as search query so operator can find closest product
+      setSearchQuery(cleanText);
+    }
+  };
+
+  // Order submission / update
   const handleConfirmSubmit = async () => {
     if (cart.length === 0 || isSubmitting || !documentType) return;
 
@@ -328,20 +404,37 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     setSubmitError(null);
 
     try {
-      const newOrder = await createNewOrder({
-        customer_reference: customerReference.trim() || null,
-        document_type: documentType,
-        warehouse_location: warehouseLocation,
-        items: cart,
-      });
+      if (editingOrder) {
+        const updated = await updateExistingOrder(editingOrder.id, {
+          customer_reference: customerReference.trim() || null,
+          document_type: documentType,
+          warehouse_location: warehouseLocation,
+          items: cart,
+        });
+        setSubmittedOrderNumber(updated.order_number);
+        setShowConfirmModal(false);
+        setCart([]);
+        setCustomerReference('');
+        setDocumentType(null);
+        if (onOrderSaved) {
+          onOrderSaved(updated);
+        }
+      } else {
+        const newOrder = await createNewOrder({
+          customer_reference: customerReference.trim() || null,
+          document_type: documentType,
+          warehouse_location: warehouseLocation,
+          items: cart,
+        });
 
-      setSubmittedOrderNumber(newOrder.order_number);
-      setShowConfirmModal(false);
-      setCart([]);
-      setCustomerReference('');
-      setDocumentType(null);
+        setSubmittedOrderNumber(newOrder.order_number);
+        setShowConfirmModal(false);
+        setCart([]);
+        setCustomerReference('');
+        setDocumentType(null);
+      }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Errore durante l'invio dell'ordine";
+      const msg = err instanceof Error ? err.message : "Errore durante il salvataggio dell'ordine";
       setSubmitError(msg);
     } finally {
       setIsSubmitting(false);
@@ -405,6 +498,39 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   return (
     <div className="min-h-[calc(100dvh-6rem)] flex flex-col justify-between pb-28 sm:pb-32">
       <div className="max-w-4xl mx-auto w-full space-y-3.5 sm:space-y-4">
+        {/* BANNER MODIFICA / INTEGRAZIONE COMMESSA ESISTENTE */}
+        {editingOrder && (
+          <div className="bg-amber-500/10 border-2 border-amber-500 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md animate-in fade-in duration-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
+                <Edit3 className="w-5 h-5 stroke-[2.5]" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-black uppercase tracking-wider bg-amber-500 text-white px-2 py-0.5 rounded">
+                    MODIFICA IN CORSO
+                  </span>
+                  <span className="font-mono font-black text-slate-900 text-base">
+                    {editingOrder.order_number}
+                  </span>
+                </div>
+                <p className="text-xs font-medium text-slate-600 mt-0.5">
+                  Stai integrando o modificando un ordine già trasmesso. Aggiungi gli articoli mancanti e premi "Aggiorna Ordine".
+                </p>
+              </div>
+            </div>
+            {onCancelEditOrder && (
+              <button
+                type="button"
+                onClick={onCancelEditOrder}
+                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100 active:scale-95 transition"
+              >
+                Annulla Modifica
+              </button>
+            )}
+          </div>
+        )}
+
         {/* STEP 1: ORDER HEADER & DOCUMENT CONFIG */}
         <section className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
           {/* Section Bar */}
@@ -607,38 +733,55 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
               )}
             </div>
 
-            <div className="relative flex items-center">
-              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                <Search className={`w-5 h-5 ${documentType ? 'text-red-600' : 'text-slate-400'}`} />
+            <div className="relative flex items-center gap-2">
+              <div className="relative flex-1 flex items-center">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                  <Search className={`w-5 h-5 ${documentType ? 'text-red-600' : 'text-slate-400'}`} />
+                </div>
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  disabled={isProductsLoading || !documentType}
+                  placeholder={
+                    isProductsLoading
+                      ? 'Sincronizzazione catalogo articoli in corso...'
+                      : !documentType
+                      ? '↑ Seleziona prima il Tipo Documento qui sopra...'
+                      : 'Digita codice, parole chiave (es. "cemento 25") o scansiona...'
+                  }
+                  className={`w-full h-14 pl-12 pr-12 rounded-xl text-sm sm:text-base font-bold transition placeholder:text-slate-400 ${
+                    !documentType
+                      ? 'bg-slate-100 border-2 border-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-slate-50 border-2 border-slate-300 text-slate-900 focus:bg-white focus:outline-none focus:border-slate-900 focus:ring-4 focus:ring-slate-900/10'
+                  }`}
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="absolute inset-y-0 right-0 pr-3.5 flex items-center justify-center min-w-[48px] min-h-[48px] text-slate-400 hover:text-slate-700 active:scale-95 touch-manipulation"
+                    aria-label="Cancella ricerca"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                )}
               </div>
-              <input
-                ref={searchInputRef}
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                disabled={isProductsLoading || !documentType}
-                placeholder={
-                  isProductsLoading
-                    ? 'Sincronizzazione catalogo articoli in corso...'
-                    : !documentType
-                    ? '↑ Seleziona prima il Tipo Documento qui sopra...'
-                    : 'Digita codice, parole chiave (es. "cemento 25") o cod. alternativo...'
-                }
-                className={`w-full h-14 pl-12 pr-12 rounded-xl text-sm sm:text-base font-bold transition placeholder:text-slate-400 ${
-                  !documentType
-                    ? 'bg-slate-100 border-2 border-slate-200 text-slate-400 cursor-not-allowed'
-                    : 'bg-slate-50 border-2 border-slate-300 text-slate-900 focus:bg-white focus:outline-none focus:border-slate-900 focus:ring-4 focus:ring-slate-900/10'
-                }`}
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center justify-center min-w-[48px] min-h-[48px] text-slate-400 hover:text-slate-700 active:scale-95 touch-manipulation"
-                  aria-label="Cancella ricerca"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              )}
+
+              {/* Barcode / QR Code Camera Scanner Trigger Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  triggerHaptic();
+                  setShowScannerModal(true);
+                }}
+                title="Scansiona Barcode o QR Code con Fotocamera"
+                aria-label="Scansiona codice a barre o QR code"
+                className="h-14 px-3 sm:px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-center gap-2 font-extrabold text-xs active:scale-95 transition touch-manipulation shrink-0 shadow-sm"
+              >
+                <Camera className="w-5 h-5 text-red-500 stroke-[2.5]" />
+                <span className="hidden sm:inline">Scanner QR</span>
+              </button>
             </div>
 
             {/* 1-Tap Recent / Frequent Products Strip (when documentType is selected and search is empty) */}
@@ -1287,7 +1430,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                 ) : (
                   <>
                     <Send className="w-4 h-4" />
-                    <span>Conferma e Invia</span>
+                    <span>{editingOrder ? 'Aggiorna Ordine' : 'Conferma e Invia'}</span>
                   </>
                 )}
               </button>
@@ -1295,6 +1438,13 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Barcode & QR Code Camera Scanner Modal */}
+      <BarcodeScannerModal
+        isOpen={showScannerModal}
+        onClose={() => setShowScannerModal(false)}
+        onScanSuccess={handleBarcodeScanned}
+      />
     </div>
   );
 };

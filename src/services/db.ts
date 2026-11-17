@@ -605,6 +605,117 @@ export async function createNewOrder(orderInput: {
   return newOrder;
 }
 
+export async function updateExistingOrder(orderId: string, orderInput: {
+  customer_reference?: string | null;
+  document_type?: import('../types').OrderDocumentType;
+  warehouse_location?: import('../types').WarehouseLocation;
+  items: {
+    id: string;
+    product?: Product;
+    quantity: number;
+    unitOfMeasure?: string;
+    isDescription?: boolean;
+    description?: string;
+  }[];
+}): Promise<Order> {
+  const currentOrders = getLocalOrders();
+  const existingIndex = currentOrders.findIndex(o => o.id === orderId);
+  if (existingIndex === -1) {
+    throw new Error('Ordine non trovato nel registro locale.');
+  }
+
+  const existingOrder = currentOrders[existingIndex];
+  const now = new Date().toISOString();
+
+  const formattedItems: OrderItem[] = orderInput.items.map(item => {
+    if (item.isDescription) {
+      const description = (item.description || '').trim();
+      if (!description) throw new Error('La riga descrittiva non può essere vuota.');
+      return {
+        id: crypto.randomUUID(),
+        order_id: orderId,
+        product_id: null,
+        line_type: 'DESCRIPTION' as const,
+        manual_description: description,
+        product_code_snapshot: '',
+        product_description_snapshot: description,
+        unit_of_measure_snapshot: '',
+        alternative_code_snapshot: null,
+        quantity: 0,
+      };
+    }
+    if (!item.product) throw new Error('Riga ordine non valida.');
+    return {
+      id: crypto.randomUUID(),
+      order_id: orderId,
+      product_id: item.product.id,
+      line_type: 'PRODUCT' as const,
+      manual_description: null,
+      product_code_snapshot: item.product.code,
+      product_description_snapshot: item.product.description,
+      unit_of_measure_snapshot: item.unitOfMeasure || item.product.unit_of_measure,
+      alternative_code_snapshot: item.product.alternative_code || null,
+      quantity: Number(item.quantity) || 1,
+    };
+  });
+
+  const updatedOrder: Order = {
+    ...existingOrder,
+    customer_reference: orderInput.customer_reference !== undefined ? orderInput.customer_reference : existingOrder.customer_reference,
+    document_type: orderInput.document_type || existingOrder.document_type,
+    warehouse_location: orderInput.warehouse_location || existingOrder.warehouse_location,
+    items: formattedItems,
+    updated_at: now,
+  };
+
+  currentOrders[existingIndex] = updatedOrder;
+  saveLocalOrders(currentOrders);
+  orderListeners.forEach(l => l(currentOrders, updatedOrder));
+  if (broadcastChannel) {
+    broadcastChannel.postMessage({ type: 'ORDER_UPDATED', payload: updatedOrder });
+  }
+
+  const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+  const supabase = getSupabaseClient();
+
+  if (isOnline && supabase) {
+    try {
+      await supabase
+        .from('orders')
+        .update({
+          customer_reference: updatedOrder.customer_reference,
+          document_type: updatedOrder.document_type,
+          warehouse_location: updatedOrder.warehouse_location,
+          updated_at: now,
+        })
+        .eq('id', orderId);
+
+      // Re-insert items for simplicity and integrity
+      await supabase.from('order_items').delete().eq('order_id', orderId);
+
+      const dbItems = formattedItems.map(it => ({
+        id: it.id,
+        order_id: orderId,
+        product_id: it.product_id,
+        line_type: it.line_type ?? 'PRODUCT',
+        manual_description: it.manual_description ?? null,
+        product_code_snapshot: it.product_code_snapshot,
+        product_description_snapshot: it.product_description_snapshot,
+        unit_of_measure_snapshot: it.unit_of_measure_snapshot,
+        alternative_code_snapshot: it.alternative_code_snapshot,
+        quantity: it.quantity,
+        created_at: now,
+      }));
+
+      await supabase.from('order_items').insert(dbItems);
+    } catch (err) {
+      console.warn('Errore durante l\'aggiornamento dell\'ordine su Supabase:', err);
+    }
+  }
+
+  return updatedOrder;
+}
+
 export async function archiveOrder(orderId: string): Promise<void> {
   const supabase = getSupabaseClient();
   if (!supabase) throw new Error('Connessione a Supabase non disponibile.');
