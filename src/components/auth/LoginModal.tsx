@@ -293,7 +293,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                     </span>
                   </div>
                   <p className="text-[11px] font-medium text-slate-500 group-hover:text-slate-300 transition-colors truncate mt-0.5">
-                    Vai a sagginplanning.vercel.app
+                    Pianificazione viaggi e consegne
                   </p>
                 </div>
               </div>
