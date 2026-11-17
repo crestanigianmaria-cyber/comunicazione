@@ -29,8 +29,10 @@ import {
   printQrSheetsDirectly,
 } from '../../lib/qrSheetGenerator';
 import {
-  renderDymoFerramentaSheetCanvas,
+  renderProductDymoSheetCanvas,
   printDymoCanvasesBatch,
+  DYMO_PRODUCT_LAYOUTS,
+  DymoProductLayout,
 } from '../../lib/dymoPrinter';
 
 interface BatchQrPrintModalProps {
@@ -48,7 +50,11 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
   companySettings,
   onClose,
 }) => {
-  // Print & Layout options
+  // Target mode: A4 vs DYMO 99015 (70x54 mm)
+  const [printTarget, setPrintTarget] = useState<'A4' | 'DYMO'>('A4');
+  const [dymoLayout, setDymoLayout] = useState<DymoProductLayout>('6_ferramenta');
+
+  // Print & Layout options (A4)
   const [presetId, setPresetId] = useState<QrSheetPresetId>('qr_3x3_20');
   const [showHeaderLogo, setShowHeaderLogo] = useState(true);
   const [showLogoInQrCenter, setShowLogoInQrCenter] = useState(true);
@@ -97,7 +103,15 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
     [presetId]
   );
 
-  const itemsPerPage = activePreset.cols * activePreset.rows;
+  const activeDymoLayout = useMemo(
+    () => DYMO_PRODUCT_LAYOUTS.find((l) => l.id === dymoLayout) || DYMO_PRODUCT_LAYOUTS[0],
+    [dymoLayout]
+  );
+
+  const itemsPerPage =
+    printTarget === 'DYMO'
+      ? activeDymoLayout.slotsPerLabel
+      : activePreset.cols * activePreset.rows;
   const totalPages = Math.max(1, Math.ceil(productsToPrint.length / itemsPerPage));
 
   // Keep currentPage within bounds
@@ -128,7 +142,7 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
     ]
   );
 
-  // Render live A4 sheet preview whenever page, products, or options change
+  // Render live A4 or DYMO 70x54 preview whenever page, products, or options change
   useEffect(() => {
     let isMounted = true;
     if (productsToPrint.length === 0) {
@@ -142,13 +156,18 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
       (currentPage + 1) * itemsPerPage
     );
 
-    renderA4SheetToCanvas(
-      pageSlice,
-      currentPage,
-      totalPages,
-      productsToPrint.length,
-      renderOptions
-    )
+    const renderPromise =
+      printTarget === 'DYMO'
+        ? renderProductDymoSheetCanvas(pageSlice, dymoLayout, '70x54')
+        : renderA4SheetToCanvas(
+            pageSlice,
+            currentPage,
+            totalPages,
+            productsToPrint.length,
+            renderOptions
+          );
+
+    renderPromise
       .then((canvas) => {
         if (isMounted) {
           setPreviewDataUrl(canvas.toDataURL('image/png'));
@@ -156,14 +175,14 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
         }
       })
       .catch((err) => {
-        console.error('Error rendering A4 preview:', err);
+        console.error('Error rendering preview:', err);
         if (isMounted) setIsRenderingPreview(false);
       });
 
     return () => {
       isMounted = false;
     };
-  }, [productsToPrint, currentPage, totalPages, itemsPerPage, renderOptions]);
+  }, [productsToPrint, currentPage, totalPages, itemsPerPage, renderOptions, printTarget, dymoLayout]);
 
   // Handle single click, Shift+Click range selection, or drag start
   const handleItemMouseDown = (index: number, code: string, e: React.MouseEvent) => {
@@ -262,14 +281,15 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
     }
   };
 
-  const handlePrintDymoMiniBatch = async () => {
+  const handlePrintDymoBatch = async () => {
     if (productsToPrint.length === 0 || isPrintingDymo) return;
     setIsPrintingDymo(true);
     try {
+      const slots = activeDymoLayout.slotsPerLabel;
       const canvases: HTMLCanvasElement[] = [];
-      for (let i = 0; i < productsToPrint.length; i += 6) {
-        const chunk = productsToPrint.slice(i, i + 6);
-        const c = await renderDymoFerramentaSheetCanvas(chunk, '70x54');
+      for (let i = 0; i < productsToPrint.length; i += slots) {
+        const chunk = productsToPrint.slice(i, i + slots);
+        const c = await renderProductDymoSheetCanvas(chunk, dymoLayout, '70x54');
         canvases.push(c);
       }
       await printDymoCanvasesBatch(canvases, '70x54');
@@ -291,58 +311,106 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
               <QrCode className="w-5 h-5 stroke-[2.5]" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-sm sm:text-base font-black text-white">
-                  Impaginatore A4 Etichette QR Code · Pronto per Taglierina
+                  {printTarget === 'DYMO'
+                    ? 'Stampa Etichette DYMO 99015 (70×54 mm)'
+                    : 'Impaginatore A4 Etichette QR Code · Pronto per Taglierina'}
                 </h3>
                 <span className="px-2.5 py-0.5 rounded-full bg-red-600 text-white font-mono text-[11px] font-black">
-                  {productsToPrint.length} ARTICOLI ({totalPages} {totalPages === 1 ? 'FOGLIO A4' : 'FOGLI A4'})
+                  {productsToPrint.length} ARTICOLI ({totalPages}{' '}
+                  {printTarget === 'DYMO'
+                    ? totalPages === 1
+                      ? 'ETICHETTA'
+                      : 'ETICHETTE'
+                    : totalPages === 1
+                    ? 'FOGLIO A4'
+                    : 'FOGLI A4'}
+                  )
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">
-                Nome articolo sempre completo (zero tagli), logo Saggin integrato e griglia a taglio unico continuo per taglierina
+                {printTarget === 'DYMO'
+                  ? 'QR ad alto contrasto con logo Saggin e descrizione articolo, pronti per stampa termica DYMO 70×54 mm'
+                  : 'Nome articolo sempre completo (zero tagli), logo Saggin integrato e griglia a taglio unico continuo per taglierina'}
               </p>
             </div>
           </div>
 
-          {/* Primary Actions: DYMO 99015 Mini 2x2 + Download Real PDF + Direct Print */}
+          {/* Mode Switch + Primary Actions */}
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handlePrintDymoMiniBatch}
-              disabled={productsToPrint.length === 0 || isPrintingDymo}
-              className="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 text-xs font-black flex items-center gap-2 transition shadow-md disabled:opacity-40 cursor-pointer"
-              title="Stampa su DYMO 99015 (70×54 mm) impaginando 6 mini-etichette da 2×2 cm su ciascuna etichetta"
-            >
-              <Tag className="w-4 h-4 stroke-[2.5]" />
-              <span>
-                {isPrintingDymo
-                  ? 'Preparazione DYMO...'
-                  : `DYMO 70×54 · 6 Mini 2×2/etich. (${Math.max(1, Math.ceil(productsToPrint.length / 6))})`}
-              </span>
-            </button>
+            {/* A4 vs DYMO 99015 Mode Toggle */}
+            <div className="flex items-center bg-slate-800 p-1 rounded-xl border border-slate-700">
+              <button
+                type="button"
+                onClick={() => {
+                  setPrintTarget('A4');
+                  setCurrentPage(0);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-black transition cursor-pointer ${
+                  printTarget === 'A4'
+                    ? 'bg-white text-slate-900 shadow-xs'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                Fogli A4
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPrintTarget('DYMO');
+                  setCurrentPage(0);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-black flex items-center gap-1.5 transition cursor-pointer ${
+                  printTarget === 'DYMO'
+                    ? 'bg-amber-500 text-slate-950 shadow-xs'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+              >
+                <Tag className="w-3.5 h-3.5" />
+                DYMO 99015
+              </button>
+            </div>
 
-            <button
-              type="button"
-              onClick={handleDownloadPdf}
-              disabled={productsToPrint.length === 0 || isExportingPdf}
-              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-black flex items-center gap-2 transition shadow-md shadow-emerald-600/20 disabled:opacity-40 cursor-pointer"
-            >
-              <FileDown className="w-4 h-4 stroke-[2.5]" />
-              <span>
-                {isExportingPdf ? 'Generazione PDF...' : 'SCARICA PDF A4 (.pdf)'}
-              </span>
-            </button>
+            {printTarget === 'DYMO' ? (
+              <button
+                type="button"
+                onClick={handlePrintDymoBatch}
+                disabled={productsToPrint.length === 0 || isPrintingDymo}
+                className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 text-xs font-black flex items-center gap-2 transition shadow-md disabled:opacity-40 cursor-pointer"
+              >
+                <Printer className="w-4 h-4 stroke-[2.5]" />
+                <span>
+                  {isPrintingDymo
+                    ? 'Preparazione DYMO...'
+                    : `STAMPA ${totalPages} ${totalPages === 1 ? 'ETICHETTA' : 'ETICHETTE'} DYMO`}
+                </span>
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={handleDownloadPdf}
+                  disabled={productsToPrint.length === 0 || isExportingPdf}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-black flex items-center gap-2 transition shadow-md shadow-emerald-600/20 disabled:opacity-40 cursor-pointer"
+                >
+                  <FileDown className="w-4 h-4 stroke-[2.5]" />
+                  <span>
+                    {isExportingPdf ? 'Generazione PDF...' : 'SCARICA PDF A4 (.pdf)'}
+                  </span>
+                </button>
 
-            <button
-              type="button"
-              onClick={handleDirectPrint}
-              disabled={productsToPrint.length === 0 || isPrinting}
-              className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 active:scale-95 text-white text-xs font-black flex items-center gap-2 transition shadow-md shadow-red-600/25 disabled:opacity-40 cursor-pointer"
-            >
-              <Printer className="w-4 h-4 stroke-[2.5]" />
-              <span>{isPrinting ? 'Preparazione...' : 'STAMPA FOGLI A4'}</span>
-            </button>
+                <button
+                  type="button"
+                  onClick={handleDirectPrint}
+                  disabled={productsToPrint.length === 0 || isPrinting}
+                  className="px-4 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 active:scale-95 text-white text-xs font-black flex items-center gap-2 transition shadow-md shadow-red-600/25 disabled:opacity-40 cursor-pointer"
+                >
+                  <Printer className="w-4 h-4 stroke-[2.5]" />
+                  <span>{isPrinting ? 'Preparazione...' : 'STAMPA FOGLI A4'}</span>
+                </button>
+              </>
+            )}
 
             <button
               type="button"
@@ -355,32 +423,60 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
           </div>
         </div>
 
-        {/* Configuration Bar: QR Size Presets & Visual Toggles */}
+        {/* Configuration Bar: QR Size Presets / DYMO Layouts & Visual Toggles */}
         <div className="px-4 py-2.5 bg-slate-100 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs shrink-0">
-          {/* Format & QR Size Selector */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[10px] font-mono font-extrabold text-slate-500 uppercase mr-1">
-              Formato & Dimensione QR:
-            </span>
-            {QR_SHEET_PRESETS.map((preset) => {
-              const active = presetId === preset.id;
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => setPresetId(preset.id)}
-                  className={`px-3 py-1.5 rounded-lg font-extrabold text-[11px] transition cursor-pointer ${
-                    active
-                      ? 'bg-slate-900 text-white shadow-xs ring-2 ring-red-600/40'
-                      : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
-                  }`}
-                  title={preset.description}
-                >
-                  {preset.label}
-                </button>
-              );
-            })}
-          </div>
+          {printTarget === 'DYMO' ? (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-extrabold text-slate-500 uppercase mr-1">
+                Formato DYMO 99015 (70×54 mm):
+              </span>
+              {DYMO_PRODUCT_LAYOUTS.map((layout) => {
+                const active = dymoLayout === layout.id;
+                return (
+                  <button
+                    key={layout.id}
+                    type="button"
+                    onClick={() => {
+                      setDymoLayout(layout.id);
+                      setCurrentPage(0);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg font-extrabold text-[11px] transition cursor-pointer ${
+                      active
+                        ? 'bg-slate-900 text-white shadow-xs ring-2 ring-amber-500/60'
+                        : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
+                    }`}
+                    title={layout.description}
+                  >
+                    {layout.label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-mono font-extrabold text-slate-500 uppercase mr-1">
+                Formato & Dimensione QR:
+              </span>
+              {QR_SHEET_PRESETS.map((preset) => {
+                const active = presetId === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => setPresetId(preset.id)}
+                    className={`px-3 py-1.5 rounded-lg font-extrabold text-[11px] transition cursor-pointer ${
+                      active
+                        ? 'bg-slate-900 text-white shadow-xs ring-2 ring-red-600/40'
+                        : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
+                    }`}
+                    title={preset.description}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Style Options */}
           <div className="flex flex-wrap items-center gap-3.5 text-[11px]">
@@ -592,7 +688,9 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
               <div className="flex items-center gap-2">
                 <Scissors className="w-4 h-4 text-red-600" />
                 <span className="font-bold text-slate-700">
-                  Anteprima Reale Foglio A4 ({activePreset.description})
+                  {printTarget === 'DYMO'
+                    ? `Anteprima Reale DYMO 99015 (${activeDymoLayout.description})`
+                    : `Anteprima Reale Foglio A4 (${activePreset.description})`}
                 </span>
               </div>
 
@@ -607,7 +705,7 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
                     <ChevronLeft className="w-4 h-4" />
                   </button>
                   <span className="font-mono font-black text-slate-900 text-xs px-2">
-                    Foglio {currentPage + 1} di {totalPages}
+                    {printTarget === 'DYMO' ? 'Etichetta' : 'Foglio'} {currentPage + 1} di {totalPages}
                   </span>
                   <button
                     type="button"
@@ -640,19 +738,27 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
                   </p>
                 </div>
               ) : (
-                <div className="relative bg-white shadow-2xl border border-slate-400 rounded-sm overflow-hidden max-w-[680px] w-full aspect-[210/297]">
+                <div
+                  className={`relative bg-white shadow-2xl border border-slate-400 rounded-sm overflow-hidden w-full ${
+                    printTarget === 'DYMO'
+                      ? 'max-w-[540px] aspect-[70/54] my-auto rounded-xl border-2'
+                      : 'max-w-[680px] aspect-[210/297]'
+                  }`}
+                >
                   {isRenderingPreview && (
                     <div className="absolute inset-0 bg-white/75 backdrop-blur-[1px] z-10 flex flex-col items-center justify-center gap-2">
                       <div className="w-8 h-8 border-4 border-red-600 border-t-transparent rounded-full animate-spin" />
                       <span className="text-xs font-mono font-bold text-slate-700">
-                        Impaginazione A4 ad alta definizione...
+                        {printTarget === 'DYMO'
+                          ? 'Rendering etichetta DYMO 99015...'
+                          : 'Impaginazione A4 ad alta definizione...'}
                       </span>
                     </div>
                   )}
                   {previewDataUrl && (
                     <img
                       src={previewDataUrl}
-                      alt={`Anteprima Foglio A4 ${currentPage + 1}`}
+                      alt={`Anteprima ${currentPage + 1}`}
                       className="w-full h-full object-contain block"
                     />
                   )}
