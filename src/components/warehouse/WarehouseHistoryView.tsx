@@ -22,6 +22,7 @@ import {
   ORDER_DOCUMENT_LABELS,
 } from '../../types';
 import { OrderPrintView } from '../office/OrderPrintView';
+import { formatOrderRowsTabSeparated } from '../../lib/erpMacro';
 import {
   OrderStatusBadge,
   LocationBadge,
@@ -107,16 +108,8 @@ export const WarehouseHistoryView: React.FC<WarehouseHistoryViewProps> = ({
   }, [orders, statusFilter, locationFilter, dateFilter, searchQuery]);
 
   const handleCopyAllRows = (order: Order) => {
-    const lines = order.items.map(item => {
-      if (item.line_type === 'DESCRIPTION') {
-        return `NOTA\t${(item.manual_description || item.product_description_snapshot || '').replace(
-          /\s+/g,
-          ' '
-        )}\t\t`;
-      }
-      return `${item.product_code_snapshot}\t${item.product_description_snapshot}\t${item.unit_of_measure_snapshot}\t${item.quantity}`;
-    });
-    navigator.clipboard.writeText(lines.join('\n')).catch(() => {});
+    const text = formatOrderRowsTabSeparated(order.items);
+    navigator.clipboard.writeText(text).catch(() => {});
     setCopiedAll(true);
     window.setTimeout(() => setCopiedAll(false), 1800);
   };

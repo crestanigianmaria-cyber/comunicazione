@@ -9,10 +9,17 @@ import {
   Warehouse,
   AlignLeft,
   Edit3,
-  UserCheck
+  UserCheck,
+  Download,
+  Keyboard
 } from 'lucide-react';
 import { Order, OrderStatus, CompanySettings, ORDER_DOCUMENT_LABELS } from '../../types';
 import { updateOrderStatus } from '../../services/db';
+import {
+  downloadWindowsErpMacroScript,
+  formatOrderRowsEnterSeparated,
+  formatOrderRowsTabSeparated,
+} from '../../lib/erpMacro';
 import { CompleteOrderOperatorModal } from './CompleteOrderOperatorModal';
 
 interface OrderDetailModalProps {
@@ -39,6 +46,8 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
   const [showCompleteOperatorModal, setShowCompleteOperatorModal] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [copiedAll, setCopiedAll] = useState(false);
+  const [copiedEnter, setCopiedEnter] = useState(false);
+  const [showErpHelper, setShowErpHelper] = useState(false);
   const [checkedItemIds, setCheckedItemIds] = useState<Record<string, boolean>>(() => {
     try {
       const raw = localStorage.getItem(`saggin_checked_items_${order.id}`);
@@ -100,15 +109,17 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
   };
 
   const handleCopyAllRows = () => {
-    const lines = currentOrder.items.map(item => {
-      if (item.line_type === 'DESCRIPTION') {
-        return `NOTA\t${(item.manual_description || item.product_description_snapshot || '').replace(/\s+/g, ' ')}\t\t`;
-      }
-      return `${item.product_code_snapshot}\t${item.product_description_snapshot}\t${item.unit_of_measure_snapshot}\t${item.quantity}`;
-    });
-    navigator.clipboard.writeText(lines.join('\n')).catch(() => {});
+    const text = formatOrderRowsTabSeparated(currentOrder.items);
+    navigator.clipboard.writeText(text).catch(() => {});
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
+  };
+
+  const handleCopyEnterRows = () => {
+    const text = formatOrderRowsEnterSeparated(currentOrder.items);
+    navigator.clipboard.writeText(text).catch(() => {});
+    setCopiedEnter(true);
+    setTimeout(() => setCopiedEnter(false), 2000);
   };
 
   const formattedDate = new Date(currentOrder.created_at).toLocaleDateString('it-IT', {
@@ -149,10 +160,22 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
               type="button"
               onClick={handleCopyAllRows}
               className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition"
-              title="Copia tutte le righe separate da TAB per incollarle in Excel o nel gestionale"
+              title="Copia tutte le righe per incollarle nel gestionale o in Excel"
             >
               {copiedAll ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
               <span className="hidden md:inline">{copiedAll ? 'Righe Copiate!' : 'Copia Righe'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                handleCopyAllRows();
+                setShowErpHelper(true);
+              }}
+              className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-extrabold text-white flex items-center gap-1.5 transition shadow-xs"
+              title="Inserimento automatico sul gestionale Windows (Invio + Freccia giù)"
+            >
+              <Keyboard className="w-3.5 h-3.5" />
+              <span className="hidden lg:inline">Gestionale PC</span>
             </button>
             {onEditOrder && !readOnly && currentOrder.status !== 'COMPLETATO' && (
               <button
@@ -416,6 +439,100 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
           onCancel={() => setShowCompleteOperatorModal(false)}
           onConfirm={handleConfirmComplete}
         />
+      )}
+
+      {showErpHelper && (
+        <div className="fixed inset-0 z-[60] bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="h-1 w-full bg-emerald-600" />
+            <div className="p-4 sm:p-5 bg-[#0b0f19] text-white flex items-center justify-between border-b border-slate-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-emerald-600/20 border border-emerald-500/40 text-emerald-400">
+                  <Keyboard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black tracking-tight">
+                    Incolla Veloce su Gestionale PC
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Sequenza: Codice → Invio → Descrizione → Invio → U.M. → Invio → Q.tà → Freccia ↓
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowErpHelper(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-sm text-slate-700">
+              <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3.5 text-xs text-emerald-950 space-y-2">
+                <p className="font-extrabold text-emerald-900">
+                  Come funziona (nessun programma da installare su Windows):
+                </p>
+                <ol className="list-decimal list-inside space-y-1.5 font-medium">
+                  <li>
+                    Scarica una sola volta il file{' '}
+                    <span className="font-mono font-bold">Saggin_Incolla_Gestionale.bat</span> e salvalo sul{' '}
+                    <strong>Desktop</strong> del PC.
+                  </li>
+                  <li>
+                    Quando devi inserire un ordine, clicca <strong>Copia Righe</strong> (già copiato ora!) e fai doppio clic sul file sul Desktop.
+                  </li>
+                  <li>
+                    Hai <strong>4 secondi</strong> per cliccare nella casella <strong>Codice</strong> della prima riga del gestionale: compilerà tutto da solo!
+                  </li>
+                </ol>
+              </div>
+
+              <button
+                type="button"
+                onClick={downloadWindowsErpMacroScript}
+                className="w-full py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm flex items-center justify-center gap-2 shadow-sm transition"
+              >
+                <Download className="w-4 h-4" />
+                <span>Scarica Macro Windows (.bat)</span>
+              </button>
+
+              <div className="pt-2 border-t border-slate-200 space-y-2">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  Copia manuale negli appunti
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCopyAllRows}
+                    className="py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 transition"
+                  >
+                    {copiedAll ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedAll ? 'Copiato (TAB)!' : 'Copia Righe (TAB)'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopyEnterRows}
+                    className="py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-300 text-slate-800 text-xs font-extrabold flex items-center justify-center gap-1.5 transition"
+                  >
+                    {copiedEnter ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedEnter ? 'Copiato (Invio)!' : 'Copia con solo Invio (\\n)'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowErpHelper(false)}
+                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-extrabold transition"
+              >
+                Chiudi
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
