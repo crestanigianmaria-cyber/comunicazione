@@ -21,6 +21,8 @@ import {
   QrCode,
   Sparkles,
   WifiOff,
+  ListTodo,
+  ChevronRight,
 } from 'lucide-react';
 import {
   Product,
@@ -63,6 +65,14 @@ interface WarehouseViewProps {
   onCommitmentLoaded?: () => void;
   onOrdersQueueChanged?: () => void;
   onCartStatsChange?: (stats: { lines: number; units: number }) => void;
+  todayRemindersSummary?: {
+    totalOpen: number;
+    urgentOpen: number;
+    overdueCount: number;
+  };
+  onOpenReminders?: () => void;
+  pendingReminderCustomerRef?: string | null;
+  onReminderCustomerRefConsumed?: () => void;
 }
 
 const DRAFT_STORAGE_KEY = 'magazzino_active_draft_v1';
@@ -176,6 +186,10 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   onCommitmentLoaded,
   onOrdersQueueChanged,
   onCartStatsChange,
+  todayRemindersSummary,
+  onOpenReminders,
+  pendingReminderCustomerRef,
+  onReminderCustomerRefConsumed,
 }) => {
   const { showToast } = useToast();
   const initialDraft = useMemo(() => loadSavedDraft(), []);
@@ -355,6 +369,23 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       }
     }
   }, [pendingCommitmentToLoad, applyCommitmentToOrder, onCommitmentLoaded]);
+
+  // Triggered when warehouse operator taps "Apri Carico" on an Order-Prep reminder
+  useEffect(() => {
+    if (pendingReminderCustomerRef) {
+      setSubmittedOrderInfo(null);
+      setDocumentType(prev => prev || 'DDT');
+      setCustomerReference(prev =>
+        prev.trim() ? `${prev} · ${pendingReminderCustomerRef}` : pendingReminderCustomerRef
+      );
+      showToast({
+        message: 'Riferimento promemoria impostato',
+        detail: pendingReminderCustomerRef,
+        tone: 'info',
+      });
+      onReminderCustomerRefConsumed?.();
+    }
+  }, [pendingReminderCustomerRef, onReminderCustomerRefConsumed, showToast]);
 
   // Auto-persist active draft cleanly when not editing an existing order
   useEffect(() => {
@@ -808,6 +839,51 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       <div className="xl:flex xl:items-start xl:gap-5">
         {/* LEFT / MAIN OPERATIONAL COMPOSER WORKSPACE */}
         <div className="flex-1 min-w-0 space-y-4">
+          {/* COMPACT DAILY REMINDERS SHORTCUT STRIP */}
+          {todayRemindersSummary && todayRemindersSummary.totalOpen > 0 && !editingOrder && onOpenReminders && (
+            <button
+              type="button"
+              onClick={onOpenReminders}
+              className={`w-full min-h-[44px] px-3.5 py-2 rounded-xl border flex items-center justify-between gap-2.5 text-left transition active:scale-[0.99] touch-manipulation shadow-2xs ${
+                todayRemindersSummary.urgentOpen > 0
+                  ? 'bg-red-50 border-red-200 hover:bg-red-100/70 text-red-950'
+                  : 'bg-amber-50 border-amber-200 hover:bg-amber-100/70 text-amber-950'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div
+                  className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
+                    todayRemindersSummary.urgentOpen > 0
+                      ? 'bg-red-600 text-white'
+                      : 'bg-amber-500 text-slate-950'
+                  }`}
+                >
+                  <ListTodo className="w-4 h-4" />
+                </div>
+                <div className="min-w-0 flex items-center gap-1.5 flex-wrap text-xs font-extrabold">
+                  <span>
+                    {todayRemindersSummary.totalOpen} promemoria da completare oggi
+                  </span>
+                  {todayRemindersSummary.urgentOpen > 0 && (
+                    <span className="px-1.5 py-0.5 rounded bg-red-600 text-white text-[10px] font-mono font-black uppercase">
+                      {todayRemindersSummary.urgentOpen}{' '}
+                      {todayRemindersSummary.urgentOpen === 1 ? 'urgente' : 'urgenti'}
+                    </span>
+                  )}
+                  {todayRemindersSummary.overdueCount > 0 && (
+                    <span className="px-1.5 py-0.5 rounded bg-amber-300 text-amber-950 text-[10px] font-mono font-black uppercase">
+                      {todayRemindersSummary.overdueCount} arretrati
+                    </span>
+                  )}
+                </div>
+              </div>
+              <span className="inline-flex items-center gap-1 text-[11px] font-mono font-black uppercase shrink-0 opacity-80">
+                <span className="hidden sm:inline">Apri To-Do</span>
+                <ChevronRight className="w-4 h-4" />
+              </span>
+            </button>
+          )}
+
           {/* COMMITMENT LOADED BANNER */}
           {loadedCommitmentBanner && (
             <div className="bg-emerald-50 border-2 border-emerald-500 rounded-2xl p-3.5 sm:p-4 flex items-start justify-between gap-3 shadow-sm animate-wms-slide-up">

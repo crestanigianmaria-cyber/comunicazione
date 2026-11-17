@@ -1,18 +1,31 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { UserRole, Order, Product, CompanySettings, CustomerCommitment, WarehouseLocation } from './types';
+import {
+  AppView,
+  UserRole,
+  Order,
+  Product,
+  CompanySettings,
+  CustomerCommitment,
+  WarehouseLocation,
+  WarehouseReminder,
+} from './types';
 import {
   fetchProducts,
   fetchOrders,
   fetchCommitments,
+  fetchReminders,
   subscribeToOrders,
   subscribeToCommitments,
   subscribeToCatalog,
+  subscribeToReminders,
+  completeWarehouseReminder,
   getCompanySettings,
   getAuthenticatedRole,
   signOutRole,
   archiveOrder,
   restoreOrder,
 } from './services/db';
+import { getLocalDateKey, sortReminders } from './lib/reminders';
 import { Header } from './components/common/Header';
 import { OfflineBanner } from './components/common/OfflineBanner';
 import { LoginModal } from './components/auth/LoginModal';
@@ -20,26 +33,20 @@ import { WarehouseView } from './components/warehouse/WarehouseView';
 import { WarehouseAppShell } from './components/warehouse/WarehouseAppShell';
 import { WarehouseHistoryView } from './components/warehouse/WarehouseHistoryView';
 import { WarehouseCommitmentsView } from './components/warehouse/WarehouseCommitmentsView';
-import { ToastProvider } from './components/warehouse/ui/ToastProvider';
+import { WarehouseRemindersView } from './components/warehouse/WarehouseRemindersView';
+import { DailyRemindersBriefModal } from './components/warehouse/DailyRemindersBriefModal';
+import { CompleteReminderModal } from './components/warehouse/CompleteReminderModal';
+import { ToastProvider, useToast } from './components/warehouse/ui/ToastProvider';
 import { OfficeDashboard } from './components/office/OfficeDashboard';
 import { OfficeCatalogView } from './components/office/OfficeCatalogView';
+import { OfficeRemindersView } from './components/office/OfficeRemindersView';
 import { CommitmentsView } from './components/office/CommitmentsView';
 import { SettingsModal } from './components/office/SettingsModal';
 import { ExcelImportModal } from './components/office/ExcelImportModal';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 
-type ActiveView =
-  | 'magazzino'
-  | 'magazzino_impegni'
-  | 'magazzino_storico'
-  | 'ufficio_dashboard'
-  | 'ufficio_impegni'
-  | 'ufficio_storico'
-  | 'ufficio_cestino'
-  | 'ufficio_catalogo'
-  | 'ufficio_impostazioni';
-
-export default function App() {
+function AppContent() {
+  const { showToast } = useToast();
   const onlineStatus = useOnlineStatus();
   const { isOnline, refreshPendingCount } = onlineStatus;
 
@@ -63,7 +70,7 @@ export default function App() {
   }, []);
 
   // Current active navigation view
-  const [activeView, setActiveView] = useState<ActiveView>('magazzino');
+  const [activeView, setActiveView] = useState<AppView>('magazzino');
 
   // Shared Warehouse loading location (synced with localStorage & App Shell Header)
   const [warehouseLocation, setWarehouseLocation] = useState<WarehouseLocation>(() => {
@@ -88,10 +95,35 @@ export default function App() {
   const [isProductsLoading, setIsProductsLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
   const [commitments, setCommitments] = useState<CustomerCommitment[]>([]);
+  const [reminders, setReminders] = useState<WarehouseReminder[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings>(() => getCompanySettings());
+
+  // Local calendar date key ('YYYY-MM-DD'), kept fresh across midnight rollovers
+  const [todayKey, setTodayKey] = useState<string>(() => getLocalDateKey());
+  useEffect(() => {
+    const syncDayKey = () => {
+      const current = getLocalDateKey();
+      setTodayKey((prev) => (prev === current ? prev : current));
+    };
+    const timer = window.setInterval(syncDayKey, 60000);
+    window.addEventListener('focus', syncDayKey);
+    document.addEventListener('visibilitychange', syncDayKey);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', syncDayKey);
+      document.removeEventListener('visibilitychange', syncDayKey);
+    };
+  }, []);
 
   // Live Warehouse Cart badge stats
   const [warehouseCartStats, setWarehouseCartStats] = useState({ lines: 0, units: 0 });
+
+  // Daily Reminders Brief + Mandatory Operator Attribution state
+  const [showDailyBrief, setShowDailyBrief] = useState(false);
+  const briefShownForSessionRef = useRef(false);
+  const briefDayKeyRef = useRef<string>(todayKey);
+  const [pendingCompleteReminder, setPendingCompleteReminder] = useState<WarehouseReminder | null>(null);
+  const [pendingReminderCustomerRef, setPendingReminderCustomerRef] = useState<string | null>(null);
 
   // Real-time new order alert banner
   const [newOrderAlert, setNewOrderAlert] = useState<Order | null>(null);
@@ -104,6 +136,11 @@ export default function App() {
       ? orders.filter(order => order.status === 'NUOVO' && !order.archived_at).length
       : 0;
   const activeCommitmentsCount = commitments.filter(c => c.status === 'ATTIVO').length;
+
+  const dueReminders = reminders.filter(r => r.status === 'DA_FARE' && r.due_date <= todayKey);
+  const dueRemindersCount = dueReminders.length;
+  const urgentDueRemindersCount = dueReminders.filter(r => r.priority === 'URGENTE').length;
+  const overdueRemindersCount = dueReminders.filter(r => r.due_date < todayKey).length;
 
   // Badge numerico sull'icona PWA, se il browser/sistema operativo lo supporta.
   useEffect(() => {
@@ -164,7 +201,15 @@ export default function App() {
           console.error('[Commitments] Initial load failed:', err);
         });
 
-      await Promise.all([productsTask, ordersTask, commitmentsTask]);
+      const remindersTask = fetchReminders()
+        .then((loadedReminders) => {
+          if (isMounted) setReminders(loadedReminders);
+        })
+        .catch((err) => {
+          console.error('[Reminders] Initial load failed:', err);
+        });
+
+      await Promise.all([productsTask, ordersTask, commitmentsTask, remindersTask]);
     }
 
     loadData();
@@ -205,6 +250,11 @@ export default function App() {
       setCommitments(updatedCommitments);
     });
 
+    // Subscribe to live warehouse reminder updates
+    const unsubReminders = subscribeToReminders((updatedReminders) => {
+      if (isMounted) setReminders(sortReminders(updatedReminders));
+    });
+
     // Subscribe to live catalog updates
     const unsubCatalog = subscribeToCatalog((updatedProducts) => {
       setProducts(updatedProducts);
@@ -233,9 +283,29 @@ export default function App() {
       if (safetyPollTimer) clearInterval(safetyPollTimer);
       unsubOrders();
       unsubCommitments();
+      unsubReminders();
       unsubCatalog();
     };
   }, [currentRole]);
+
+  // Show daily operational reminders brief automatically when Warehouse connects/logs in
+  useEffect(() => {
+    if (currentRole !== 'magazzino') return;
+    if (briefDayKeyRef.current !== todayKey) {
+      briefDayKeyRef.current = todayKey;
+      briefShownForSessionRef.current = false;
+    }
+    if (!briefShownForSessionRef.current && dueRemindersCount > 0) {
+      briefShownForSessionRef.current = true;
+      setShowDailyBrief(true);
+    }
+  }, [currentRole, todayKey, dueRemindersCount]);
+
+  useEffect(() => {
+    if (showDailyBrief && dueRemindersCount === 0) {
+      setShowDailyBrief(false);
+    }
+  }, [showDailyBrief, dueRemindersCount]);
 
   // Update default view based on role
   useEffect(() => {
@@ -244,6 +314,7 @@ export default function App() {
     } else if (
       currentRole === 'ufficio' &&
       (activeView === 'magazzino' ||
+        activeView === 'magazzino_promemoria' ||
         activeView === 'magazzino_impegni' ||
         activeView === 'magazzino_storico')
     ) {
@@ -251,7 +322,40 @@ export default function App() {
     }
   }, [currentRole]);
 
+  const handleStartOrderFromReminder = useCallback(
+    (reminder: WarehouseReminder) => {
+      const ref = reminder.customer_reference?.trim() || reminder.title.trim();
+      if (reminder.warehouse_location === 'MAGAZZINO' || reminder.warehouse_location === 'DEPOSITO') {
+        handleWarehouseLocationChange(reminder.warehouse_location);
+      }
+      setPendingReminderCustomerRef(ref);
+      setShowDailyBrief(false);
+      setActiveView('magazzino');
+    },
+    [handleWarehouseLocationChange]
+  );
+
+  const handleConfirmCompleteReminder = async (operatorName: string, completionNote?: string) => {
+    if (!pendingCompleteReminder) return;
+    const target = pendingCompleteReminder;
+    await completeWarehouseReminder(target.id, {
+      completedBy: operatorName,
+      completionNote,
+    });
+    refreshPendingCount();
+    setPendingCompleteReminder(null);
+    showToast({
+      message: 'Attività completata',
+      detail: `${target.title} · Operatore: ${operatorName}`,
+      tone: 'success',
+    });
+  };
+
   const handleLoginSuccess = (role: UserRole) => {
+    briefShownForSessionRef.current = false;
+    briefDayKeyRef.current = getLocalDateKey();
+    setShowDailyBrief(false);
+    setPendingCompleteReminder(null);
     setCurrentRole(role);
     setShowRoleModal(false);
     if (role === 'magazzino') {
@@ -267,6 +371,9 @@ export default function App() {
     } catch (error) {
       console.error('Errore durante la disconnessione:', error);
     } finally {
+      briefShownForSessionRef.current = false;
+      setShowDailyBrief(false);
+      setPendingCompleteReminder(null);
       setCurrentRole(null);
       setShowRoleModal(false);
     }
@@ -321,7 +428,7 @@ export default function App() {
   // --------------------------------------------------------------------------
   if (currentRole === 'magazzino') {
     return (
-      <ToastProvider>
+      <>
         <WarehouseAppShell
           activeView={activeView}
           onNavigate={view => setActiveView(view)}
@@ -332,6 +439,8 @@ export default function App() {
           warehouseLocation={warehouseLocation}
           onWarehouseLocationChange={handleWarehouseLocationChange}
           activeCommitmentsCount={activeCommitmentsCount}
+          dueRemindersCount={dueRemindersCount}
+          hasUrgentReminders={urgentDueRemindersCount > 0}
           cartLinesCount={warehouseCartStats.lines}
           editingOrder={editingOrder}
         >
@@ -352,8 +461,28 @@ export default function App() {
               onCommitmentLoaded={() => setPendingCommitmentToLoad(null)}
               onOrdersQueueChanged={refreshPendingCount}
               onCartStatsChange={setWarehouseCartStats}
+              todayRemindersSummary={{
+                totalOpen: dueRemindersCount,
+                urgentOpen: urgentDueRemindersCount,
+                overdueCount: overdueRemindersCount,
+              }}
+              onOpenReminders={() => setActiveView('magazzino_promemoria')}
+              pendingReminderCustomerRef={pendingReminderCustomerRef}
+              onReminderCustomerRefConsumed={() => setPendingReminderCustomerRef(null)}
             />
           </div>
+
+          {activeView === 'magazzino_promemoria' && (
+            <WarehouseRemindersView
+              reminders={reminders}
+              onRefreshReminders={async () => {
+                const refreshed = await fetchReminders(true);
+                setReminders(refreshed);
+              }}
+              onRequestComplete={(reminder) => setPendingCompleteReminder(reminder)}
+              onStartOrderFromReminder={handleStartOrderFromReminder}
+            />
+          )}
 
           {activeView === 'magazzino_impegni' && (
             <WarehouseCommitmentsView
@@ -381,156 +510,195 @@ export default function App() {
             />
           )}
         </WarehouseAppShell>
-      </ToastProvider>
+
+        {/* Daily login briefing modal (yields cleanly while CompleteReminderModal is active) */}
+        <DailyRemindersBriefModal
+          isOpen={showDailyBrief && !pendingCompleteReminder}
+          reminders={reminders}
+          onClose={() => setShowDailyBrief(false)}
+          onOpenFullTodoList={() => {
+            setShowDailyBrief(false);
+            setActiveView('magazzino_promemoria');
+          }}
+          onRequestComplete={(reminder) => setPendingCompleteReminder(reminder)}
+          onStartOrderFromReminder={handleStartOrderFromReminder}
+        />
+
+        {/* Mandatory operator attribution modal before completing any reminder */}
+        <CompleteReminderModal
+          reminder={pendingCompleteReminder}
+          operatorMode="magazzino"
+          onCancel={() => setPendingCompleteReminder(null)}
+          onConfirm={handleConfirmCompleteReminder}
+        />
+      </>
     );
   }
 
   // --------------------------------------------------------------------------
-  // PORTALE UFFICIO (Unchanged workflows & layout)
+  // PORTALE UFFICIO (Unchanged workflows & layout + Office Reminders tab)
   // --------------------------------------------------------------------------
   return (
-    <ToastProvider>
-      <div className="min-h-screen bg-[#f4f6f8] flex flex-col font-sans text-slate-900 select-none">
-        {/* Offline Status Alert */}
-        <OfflineBanner statusOverride={onlineStatus} />
+    <div className="min-h-screen bg-[#f4f6f8] flex flex-col font-sans text-slate-900 select-none">
+      {/* Offline Status Alert */}
+      <OfflineBanner statusOverride={onlineStatus} />
 
-        {/* Primary Top Header */}
-        <Header
-          currentRole={currentRole}
-          activeView={activeView}
-          onNavigate={(view) => setActiveView(view)}
-          onLogout={handleLogout}
-          onSwitchRole={handleSwitchRole}
-          companySettings={companySettings}
-          isOnline={isOnline}
-          notificationPermission={notificationPermission}
-          onEnableNotifications={handleEnableNotifications}
-          newOrdersCount={newOrdersCount}
-          activeCommitmentsCount={activeCommitmentsCount}
-        />
+      {/* Primary Top Header */}
+      <Header
+        currentRole={currentRole}
+        activeView={activeView}
+        onNavigate={(view) => setActiveView(view)}
+        onLogout={handleLogout}
+        onSwitchRole={handleSwitchRole}
+        companySettings={companySettings}
+        isOnline={isOnline}
+        notificationPermission={notificationPermission}
+        onEnableNotifications={handleEnableNotifications}
+        newOrdersCount={newOrdersCount}
+        activeCommitmentsCount={activeCommitmentsCount}
+        pendingTodayRemindersCount={dueRemindersCount}
+      />
 
-        {/* Main View Area */}
-        <main className="flex-1 w-full max-w-[1440px] mx-auto p-3 sm:p-5 lg:p-6">
-          {/* Edit order requested from Office Dashboard */}
-          {activeView === 'magazzino' && (
-            <WarehouseView
-              products={products}
-              isProductsLoading={isProductsLoading}
-              companySettings={companySettings}
-              isOnline={isOnline}
-              warehouseLocation={warehouseLocation}
-              onWarehouseLocationChange={handleWarehouseLocationChange}
-              editingOrder={editingOrder}
-              onCancelEditOrder={() => {
-                setEditingOrder(null);
-                setActiveView('ufficio_dashboard');
-              }}
-              onOrderSaved={() => {
-                setEditingOrder(null);
-                setActiveView('ufficio_dashboard');
-              }}
-              commitments={commitments}
-              pendingCommitmentToLoad={pendingCommitmentToLoad}
-              onCommitmentLoaded={() => setPendingCommitmentToLoad(null)}
-              onOrdersQueueChanged={refreshPendingCount}
-            />
-          )}
-
-          {/* INTERFACCIA UFFICIO: DASHBOARD */}
-          {activeView === 'ufficio_dashboard' && (
-            <OfficeDashboard
-              orders={orders}
-              products={products}
-              companySettings={companySettings}
-              newOrderAlert={newOrderAlert}
-              onClearNewOrderAlert={() => setNewOrderAlert(null)}
-              onOpenExcelModal={() => setShowExcelModal(true)}
-              isHistoricView={false}
-              onArchiveOrder={async (order) => {
-                await archiveOrder(order.id);
-                setOrders(await fetchOrders(true));
-              }}
-              onEditOrder={(order) => {
-                setEditingOrder(order);
-                setActiveView('magazzino');
-              }}
-            />
-          )}
-
-          {/* INTERFACCIA UFFICIO: IMPEGNI CLIENTI & SEZIONE VELUX */}
-          {activeView === 'ufficio_impegni' && (
-            <CommitmentsView
-              commitments={commitments}
-              products={products}
-              readOnly={false}
-              onRefreshCommitments={async () => {
-                const refreshed = await fetchCommitments(true);
-                setCommitments(refreshed);
-              }}
-            />
-          )}
-
-          {/* INTERFACCIA UFFICIO: STORICO COMPLETO */}
-          {activeView === 'ufficio_storico' && (
-            <OfficeDashboard
-              orders={orders}
-              products={products}
-              companySettings={companySettings}
-              newOrderAlert={newOrderAlert}
-              onClearNewOrderAlert={() => setNewOrderAlert(null)}
-              onOpenExcelModal={() => setShowExcelModal(true)}
-              isHistoricView={true}
-            />
-          )}
-
-          {activeView === 'ufficio_cestino' && (
-            <OfficeDashboard
-              orders={orders}
-              products={products}
-              companySettings={companySettings}
-              newOrderAlert={null}
-              onClearNewOrderAlert={() => {}}
-              onOpenExcelModal={() => {}}
-              isHistoricView={true}
-              isTrashView={true}
-              onRestoreOrder={async (order) => {
-                await restoreOrder(order.id);
-                setOrders(await fetchOrders(true));
-              }}
-            />
-          )}
-
-          {/* INTERFACCIA UFFICIO: CATALOGO ARTICOLI & EXCEL */}
-          {activeView === 'ufficio_catalogo' && (
-            <OfficeCatalogView
-              products={products}
-              companySettings={companySettings}
-              onOpenExcelImport={() => setShowExcelModal(true)}
-            />
-          )}
-
-          {/* INTERFACCIA UFFICIO: IMPOSTAZIONI & SUPABASE */}
-          {activeView === 'ufficio_impostazioni' && (
-            <SettingsModal
-              initialSettings={companySettings}
-              currentRole={currentRole}
-              onSettingsSaved={(newSettings) => setCompanySettings(newSettings)}
-            />
-          )}
-        </main>
-
-        {/* Global Excel Import Modal (SheetJS) */}
-        {showExcelModal && (
-          <ExcelImportModal
+      {/* Main View Area */}
+      <main className="flex-1 w-full max-w-[1440px] mx-auto p-3 sm:p-5 lg:p-6">
+        {/* Edit order requested from Office Dashboard */}
+        {activeView === 'magazzino' && (
+          <WarehouseView
             products={products}
-            onClose={() => setShowExcelModal(false)}
-            onImportCompleted={async () => {
-              const reloaded = await fetchProducts();
-              setProducts(reloaded);
+            isProductsLoading={isProductsLoading}
+            companySettings={companySettings}
+            isOnline={isOnline}
+            warehouseLocation={warehouseLocation}
+            onWarehouseLocationChange={handleWarehouseLocationChange}
+            editingOrder={editingOrder}
+            onCancelEditOrder={() => {
+              setEditingOrder(null);
+              setActiveView('ufficio_dashboard');
+            }}
+            onOrderSaved={() => {
+              setEditingOrder(null);
+              setActiveView('ufficio_dashboard');
+            }}
+            commitments={commitments}
+            pendingCommitmentToLoad={pendingCommitmentToLoad}
+            onCommitmentLoaded={() => setPendingCommitmentToLoad(null)}
+            onOrdersQueueChanged={refreshPendingCount}
+          />
+        )}
+
+        {/* INTERFACCIA UFFICIO: DASHBOARD */}
+        {activeView === 'ufficio_dashboard' && (
+          <OfficeDashboard
+            orders={orders}
+            products={products}
+            companySettings={companySettings}
+            newOrderAlert={newOrderAlert}
+            onClearNewOrderAlert={() => setNewOrderAlert(null)}
+            onOpenExcelModal={() => setShowExcelModal(true)}
+            isHistoricView={false}
+            onArchiveOrder={async (order) => {
+              await archiveOrder(order.id);
+              setOrders(await fetchOrders(true));
+            }}
+            onEditOrder={(order) => {
+              setEditingOrder(order);
+              setActiveView('magazzino');
             }}
           />
         )}
-      </div>
+
+        {/* INTERFACCIA UFFICIO: PROMEMORIA & TO-DO MAGAZZINO */}
+        {activeView === 'ufficio_promemoria' && (
+          <OfficeRemindersView
+            reminders={reminders}
+            onRefreshReminders={async () => {
+              const refreshed = await fetchReminders(true);
+              setReminders(refreshed);
+            }}
+          />
+        )}
+
+        {/* INTERFACCIA UFFICIO: IMPEGNI CLIENTI & SEZIONE VELUX */}
+        {activeView === 'ufficio_impegni' && (
+          <CommitmentsView
+            commitments={commitments}
+            products={products}
+            readOnly={false}
+            onRefreshCommitments={async () => {
+              const refreshed = await fetchCommitments(true);
+              setCommitments(refreshed);
+            }}
+          />
+        )}
+
+        {/* INTERFACCIA UFFICIO: STORICO COMPLETO */}
+        {activeView === 'ufficio_storico' && (
+          <OfficeDashboard
+            orders={orders}
+            products={products}
+            companySettings={companySettings}
+            newOrderAlert={newOrderAlert}
+            onClearNewOrderAlert={() => setNewOrderAlert(null)}
+            onOpenExcelModal={() => setShowExcelModal(true)}
+            isHistoricView={true}
+          />
+        )}
+
+        {activeView === 'ufficio_cestino' && (
+          <OfficeDashboard
+            orders={orders}
+            products={products}
+            companySettings={companySettings}
+            newOrderAlert={null}
+            onClearNewOrderAlert={() => {}}
+            onOpenExcelModal={() => {}}
+            isHistoricView={true}
+            isTrashView={true}
+            onRestoreOrder={async (order) => {
+              await restoreOrder(order.id);
+              setOrders(await fetchOrders(true));
+            }}
+          />
+        )}
+
+        {/* INTERFACCIA UFFICIO: CATALOGO ARTICOLI & EXCEL */}
+        {activeView === 'ufficio_catalogo' && (
+          <OfficeCatalogView
+            products={products}
+            companySettings={companySettings}
+            onOpenExcelImport={() => setShowExcelModal(true)}
+          />
+        )}
+
+        {/* INTERFACCIA UFFICIO: IMPOSTAZIONI & SUPABASE */}
+        {activeView === 'ufficio_impostazioni' && (
+          <SettingsModal
+            initialSettings={companySettings}
+            currentRole={currentRole}
+            onSettingsSaved={(newSettings) => setCompanySettings(newSettings)}
+          />
+        )}
+      </main>
+
+      {/* Global Excel Import Modal (SheetJS) */}
+      {showExcelModal && (
+        <ExcelImportModal
+          products={products}
+          onClose={() => setShowExcelModal(false)}
+          onImportCompleted={async () => {
+            const reloaded = await fetchProducts();
+            setProducts(reloaded);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <AppContent />
     </ToastProvider>
   );
 }

@@ -15,6 +15,7 @@ import {
   Edit3,
   AlertTriangle,
   X,
+  ListTodo,
 } from 'lucide-react';
 import { AppView, CompanySettings, Order, WarehouseLocation } from '../../types';
 import { PWAInstallButton } from '../common/PWAInstallButton';
@@ -32,6 +33,8 @@ interface WarehouseAppShellProps {
   warehouseLocation: WarehouseLocation;
   onWarehouseLocationChange: (loc: WarehouseLocation) => void;
   activeCommitmentsCount: number;
+  dueRemindersCount?: number;
+  hasUrgentReminders?: boolean;
   cartLinesCount: number;
   editingOrder: Order | null;
   children: React.ReactNode;
@@ -41,6 +44,10 @@ const VIEW_META: Record<string, { title: string; subtitle: string }> = {
   magazzino: {
     title: 'Nuovo Ordine di Carico',
     subtitle: 'Composizione distinta materiali da banco e piazzale',
+  },
+  magazzino_promemoria: {
+    title: 'Attività & Promemoria',
+    subtitle: 'To-Do giornaliera di magazzino e ordini da preparare',
   },
   magazzino_storico: {
     title: 'Storico Ordini Magazzino',
@@ -62,6 +69,8 @@ export const WarehouseAppShell: React.FC<WarehouseAppShellProps> = ({
   warehouseLocation,
   onWarehouseLocationChange,
   activeCommitmentsCount,
+  dueRemindersCount = 0,
+  hasUrgentReminders = false,
   cartLinesCount,
   editingOrder,
   children,
@@ -121,6 +130,7 @@ export const WarehouseAppShell: React.FC<WarehouseAppShellProps> = ({
   const navItems: {
     id: AppView;
     label: string;
+    tabletLabel: string;
     mobileLabel: string;
     icon: typeof PlusCircle;
     badge?: number | string;
@@ -129,20 +139,32 @@ export const WarehouseAppShell: React.FC<WarehouseAppShellProps> = ({
     {
       id: 'magazzino',
       label: editingOrder ? `Modifica ${editingOrder.order_number}` : 'Nuovo Ordine',
+      tabletLabel: editingOrder ? 'Modifica' : 'Nuovo',
       mobileLabel: editingOrder ? 'Modifica' : 'Nuovo',
       icon: editingOrder ? Edit3 : PlusCircle,
       badge: cartLinesCount > 0 ? cartLinesCount : undefined,
       badgeTone: editingOrder ? 'amber' : 'red',
     },
     {
+      id: 'magazzino_promemoria',
+      label: 'Attività & To-Do',
+      tabletLabel: 'Attività',
+      mobileLabel: 'Attività',
+      icon: ListTodo,
+      badge: dueRemindersCount > 0 ? dueRemindersCount : undefined,
+      badgeTone: hasUrgentReminders ? 'red' : 'amber',
+    },
+    {
       id: 'magazzino_storico',
       label: 'Storico Ordini',
+      tabletLabel: 'Storico',
       mobileLabel: 'Storico',
       icon: ClipboardList,
     },
     {
       id: 'magazzino_impegni',
       label: 'Impegni & VELUX',
+      tabletLabel: 'Impegni',
       mobileLabel: 'Impegni',
       icon: QrCode,
       badge: activeCommitmentsCount > 0 ? activeCommitmentsCount : undefined,
@@ -485,9 +507,9 @@ export const WarehouseAppShell: React.FC<WarehouseAppShellProps> = ({
             </div>
           </div>
 
-          {/* TABLET 3-TAB NAV BAR (768px - 1199px) */}
+          {/* TABLET 4-TAB NAV BAR (768px - 1199px) */}
           <div className="hidden md:flex items-center justify-between gap-2.5 border-t border-slate-800/90 bg-slate-950/90 px-4 lg:px-5 py-2">
-            <nav className="grid grid-cols-3 gap-1.5 flex-1 max-w-2xl" aria-label="Sezioni Magazzino">
+            <nav className="grid grid-cols-4 gap-1.5 flex-1 max-w-3xl" aria-label="Sezioni Magazzino">
               {navItems.map(item => {
                 const active = activeView === item.id;
                 const Icon = item.icon;
@@ -503,11 +525,16 @@ export const WarehouseAppShell: React.FC<WarehouseAppShellProps> = ({
                     }`}
                   >
                     <Icon className="w-3.5 h-3.5 lg:w-4 lg:h-4 shrink-0" />
-                    <span className="truncate">{item.label}</span>
+                    <span className="truncate lg:hidden">{item.tabletLabel}</span>
+                    <span className="hidden lg:inline truncate">{item.label}</span>
                     {item.badge !== undefined && (
                       <span
                         className={`min-w-[20px] h-5 px-1.5 rounded-full text-[10px] font-mono font-black flex items-center justify-center shrink-0 ${
-                          active ? 'bg-white text-red-700' : 'bg-slate-800 text-white'
+                          active
+                            ? 'bg-white text-red-700'
+                            : item.badgeTone === 'amber'
+                            ? 'bg-amber-400 text-slate-950'
+                            : 'bg-slate-800 text-white'
                         }`}
                       >
                         {item.badge}
@@ -604,9 +631,9 @@ export const WarehouseAppShell: React.FC<WarehouseAppShellProps> = ({
       {!isMobileTyping && (
         <nav
           aria-label="Menu rapido magazzino"
-          className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 px-2 pt-1.5 pb-safe shadow-[0_-4px_20px_rgba(15,23,42,0.08)] no-print"
+          className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 px-1.5 pt-1.5 pb-safe shadow-[0_-4px_20px_rgba(15,23,42,0.08)] no-print"
         >
-          <div className="grid grid-cols-3 gap-1.5 max-w-md mx-auto">
+          <div className="grid grid-cols-4 gap-1 max-w-md mx-auto">
             {navItems.map(item => {
               const active = activeView === item.id;
               const Icon = item.icon;

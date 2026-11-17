@@ -10,10 +10,16 @@ import {
   CommitmentItem,
   CommitmentCategory,
   CommitmentStatus,
+  WarehouseReminder,
+  ReminderCategory,
+  ReminderPriority,
+  ReminderStatus,
+  ReminderLocationScope,
 } from '../types';
 import { INITIAL_PRODUCTS } from '../data/initialCatalog';
 import { getSupabaseClient } from '../lib/supabase';
 import { playOrderNotificationChime } from '../lib/audio';
+import { getLocalDateKey, sortReminders } from '../lib/reminders';
 import { idbGetAllProducts, idbSaveAllProducts, idbClearProducts, idbGetAllOrders, idbSaveAllOrders } from './indexedDb';
 
 const STORAGE_KEY_PRODUCTS = 'magazzino_products_v1';
@@ -22,7 +28,10 @@ const STORAGE_KEY_ORDER_SEQ = 'magazzino_order_sequence_v1';
 const STORAGE_KEY_PENDING = 'magazzino_pending_orders_v1';
 const STORAGE_KEY_SETTINGS = 'magazzino_company_settings_v1';
 const STORAGE_KEY_COMMITMENTS = 'magazzino_commitments_v1';
+const STORAGE_KEY_REMINDERS = 'magazzino_reminders_v1';
+const STORAGE_KEY_PENDING_REMINDERS = 'magazzino_pending_reminder_ops_v1';
 const COMMITMENT_DB_PREFIX = '__SAGGIN_IMP_V1__';
+const REMINDER_DB_PREFIX = '__SAGGIN_REM_V1__';
 const ORDER_COMPLETED_BY_MARKER = '__EVASO_DA__:';
 
 function parseOrderCustomerRef(rawRef: string | null | undefined): {
@@ -67,6 +76,7 @@ try {
 let cachedProducts: Product[] | null = null;
 let cachedOrders: Order[] | null = null;
 let cachedCommitments: CustomerCommitment[] | null = null;
+let cachedReminders: WarehouseReminder[] | null = null;
 
 // Cross-tab / cross-window real-time synchronization channel
 const broadcastChannel = typeof BroadcastChannel !== 'undefined'
@@ -76,10 +86,12 @@ const broadcastChannel = typeof BroadcastChannel !== 'undefined'
 type OrderListener = (orders: Order[], newOrderEvent?: Order) => void;
 type CatalogListener = (products: Product[]) => void;
 type CommitmentListener = (commitments: CustomerCommitment[]) => void;
+type ReminderListener = (reminders: WarehouseReminder[]) => void;
 
 const orderListeners = new Set<OrderListener>();
 const catalogListeners = new Set<CatalogListener>();
 const commitmentListeners = new Set<CommitmentListener>();
+const reminderListeners = new Set<ReminderListener>();
 
 // Default company settings
 const DEFAULT_COMPANY_SETTINGS: CompanySettings = {
@@ -112,6 +124,9 @@ if (broadcastChannel) {
     } else if (type === 'COMMITMENTS_UPDATED') {
       const commitments = getLocalCommitments();
       commitmentListeners.forEach(listener => listener(commitments));
+    } else if (type === 'REMINDERS_UPDATED') {
+      const reminders = getLocalReminders();
+      reminderListeners.forEach(listener => listener(reminders));
     } else if (type === 'CATALOG_UPDATED') {
       const prods = await idbGetAllProducts();
       cachedProducts = prods;
@@ -311,6 +326,161 @@ function parseCommitmentFromOrderRow(row: any): CustomerCommitment | null {
     return null;
   }
 }
+
+interface ReminderHeaderMeta {
+  t: string; // title
+  d?: string | null; // description
+  rt: ReminderCategory; // 'ATTIVITA' | 'ORDINE_DA_PREPARARE'
+  dd: string; // due_date 'YYYY-MM-DD'
+  dt?: string | null; // due_time 'HH:mm'
+  pr: ReminderPriority; // 'NORMALE' | 'URGENTE'
+  wl: ReminderLocationScope; // 'MAGAZZINO' | 'DEPOSITO' | 'ENTRAMBI'
+  cr?: string | null; // customer_reference
+  cb?: string | null; // created_by
+  st: ReminderStatus; // 'DA_FARE' | 'COMPLETATO'
+  cpb?: string | null; // completed_by
+  cpa?: string | null; // completed_at
+  cn?: string | null; // completion_note
+}
+
+type PendingReminderOp =
+  | { id: string; op: 'UPSERT'; reminder: WarehouseReminder }
+  | { id: string; op: 'DELETE'; archivedAt: string };
+
+function isReminderOrderRow(row: any): boolean {
+  return typeof row?.customer_reference === 'string' && row.customer_reference.startsWith(REMINDER_DB_PREFIX);
+}
+
+function encodeReminderHeaderMeta(reminder: WarehouseReminder): string {
+  const meta: ReminderHeaderMeta = {
+    t: reminder.title,
+    d: reminder.description || null,
+    rt: reminder.category,
+    dd: reminder.due_date,
+    dt: reminder.due_time || null,
+    pr: reminder.priority,
+    wl: reminder.warehouse_location,
+    cr: reminder.customer_reference || null,
+    cb: reminder.created_by || null,
+    st: reminder.status,
+    cpb: reminder.completed_by || null,
+    cpa: reminder.completed_at || null,
+    cn: reminder.completion_note || null,
+  };
+  return REMINDER_DB_PREFIX + JSON.stringify(meta);
+}
+
+function parseReminderFromOrderRow(row: any): WarehouseReminder | null {
+  if (!isReminderOrderRow(row)) return null;
+  if (row.archived_at) return null;
+
+  try {
+    const rawJson = String(row.customer_reference).slice(REMINDER_DB_PREFIX.length);
+    const meta = JSON.parse(rawJson) as ReminderHeaderMeta;
+    const isCompleted = row.status === 'COMPLETATO' || meta.st === 'COMPLETATO';
+    const fallbackDate = getLocalDateKey(new Date(row.created_at || Date.now()));
+
+    return {
+      id: row.id,
+      title: meta.t || 'Promemoria',
+      description: meta.d || null,
+      category: meta.rt === 'ORDINE_DA_PREPARARE' ? 'ORDINE_DA_PREPARARE' : 'ATTIVITA',
+      due_date: /^\d{4}-\d{2}-\d{2}$/.test(meta.dd || '') ? meta.dd : fallbackDate,
+      due_time: meta.dt || null,
+      priority: meta.pr === 'URGENTE' ? 'URGENTE' : 'NORMALE',
+      warehouse_location:
+        meta.wl === 'MAGAZZINO' || meta.wl === 'DEPOSITO' || meta.wl === 'ENTRAMBI'
+          ? meta.wl
+          : row.warehouse_location === 'DEPOSITO'
+          ? 'DEPOSITO'
+          : 'ENTRAMBI',
+      customer_reference: meta.cr || null,
+      status: isCompleted ? 'COMPLETATO' : 'DA_FARE',
+      created_by: meta.cb || null,
+      completed_by: meta.cpb || null,
+      completed_at: meta.cpa || null,
+      completion_note: meta.cn || null,
+      created_at: row.created_at || new Date().toISOString(),
+      updated_at: row.updated_at || row.created_at || new Date().toISOString(),
+    };
+  } catch (err) {
+    console.warn('Failed to parse reminder row:', err);
+    return null;
+  }
+}
+
+function getLocalReminders(): WarehouseReminder[] {
+  if (cachedReminders !== null) {
+    return cachedReminders;
+  }
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_REMINDERS);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      cachedReminders = Array.isArray(parsed) ? sortReminders(parsed) : [];
+      return cachedReminders;
+    }
+  } catch (err) {
+    console.warn('Reading reminders from localStorage:', err);
+  }
+  return [];
+}
+
+function saveLocalReminders(reminders: WarehouseReminder[]): void {
+  const sorted = sortReminders(reminders);
+  cachedReminders = sorted;
+  try {
+    localStorage.setItem(STORAGE_KEY_REMINDERS, JSON.stringify(sorted));
+  } catch (err) {
+    console.warn('Error saving reminders to localStorage:', err);
+  }
+}
+
+function getLocalPendingReminderOps(): PendingReminderOp[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_PENDING_REMINDERS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalPendingReminderOps(ops: PendingReminderOp[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEY_PENDING_REMINDERS, JSON.stringify(ops));
+  } catch (err) {
+    console.warn('Error saving pending reminder ops:', err);
+  }
+}
+
+function enqueuePendingReminderOp(op: PendingReminderOp): void {
+  const existing = getLocalPendingReminderOps().filter((item) => item.id !== op.id);
+  existing.push(op);
+  saveLocalPendingReminderOps(existing);
+}
+
+function clearPendingReminderOp(id: string): void {
+  const remaining = getLocalPendingReminderOps().filter((item) => item.id !== id);
+  saveLocalPendingReminderOps(remaining);
+}
+
+function mergeRemindersWithPending(cloudList: WarehouseReminder[]): WarehouseReminder[] {
+  const pendingOps = getLocalPendingReminderOps();
+  if (pendingOps.length === 0) return cloudList;
+
+  const byId = new Map<string, WarehouseReminder>(cloudList.map((r) => [r.id, r]));
+  for (const op of pendingOps) {
+    if (op.op === 'DELETE') {
+      byId.delete(op.id);
+    } else if (op.op === 'UPSERT') {
+      byId.set(op.id, op.reminder);
+    }
+  }
+  return Array.from(byId.values());
+}
+
 
 
 // --------------------------------------------------------------------------
@@ -558,7 +728,23 @@ export async function fetchOrders(forceRefresh = false): Promise<Order[]> {
       if (ordersErr) {
         console.error('[Orders] Supabase read failed; preserving local cache:', ordersErr);
       } else if (ordersData) {
-        const normalizedOrders = ordersData.map((order: any) => {
+        const cloudReminders: WarehouseReminder[] = [];
+        const nonReminderOrders: any[] = [];
+
+        for (const row of ordersData) {
+          if (isReminderOrderRow(row)) {
+            const parsedReminder = parseReminderFromOrderRow(row);
+            if (parsedReminder) cloudReminders.push(parsedReminder);
+            continue;
+          }
+          nonReminderOrders.push(row);
+        }
+
+        const mergedReminders = sortReminders(mergeRemindersWithPending(cloudReminders));
+        saveLocalReminders(mergedReminders);
+        reminderListeners.forEach(listener => listener(mergedReminders));
+
+        const normalizedOrders = nonReminderOrders.map((order: any) => {
           if (isCommitmentOrderRow(order)) {
             return {
               ...order,
@@ -585,12 +771,13 @@ export async function fetchOrders(forceRefresh = false): Promise<Order[]> {
   if (cachedOrders === null || forceRefresh) {
     const idbOrders = await idbGetAllOrders();
     if (idbOrders && idbOrders.length > 0) {
-      cachedOrders = idbOrders;
-      return idbOrders.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      const cleanIdbOrders = idbOrders.filter(o => !isReminderOrderRow(o));
+      cachedOrders = cleanIdbOrders;
+      return cleanIdbOrders.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     }
   }
 
-  const local = getLocalOrders();
+  const local = getLocalOrders().filter(o => !isReminderOrderRow(o));
   return local.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 }
 
@@ -1175,9 +1362,11 @@ export function subscribeToOrders(callback: OrderListener): () => void {
           { event: '*', schema: 'public', table: 'orders' },
           (payload) => {
             const newRow = payload.new as { id?: string; customer_reference?: string } | null;
+            const oldRow = payload.old as { id?: string; customer_reference?: string } | null;
             const insertedId = newRow?.id;
             const isCommitment = isCommitmentOrderRow(newRow);
-            if (payload.eventType === 'INSERT' && insertedId && !isCommitment) {
+            const isReminder = isReminderOrderRow(newRow) || isReminderOrderRow(oldRow);
+            if (payload.eventType === 'INSERT' && insertedId && !isCommitment && !isReminder) {
               pendingInsertedOrderId = insertedId;
               playOrderNotificationChime();
             }
@@ -1537,6 +1726,323 @@ export async function deleteCustomerCommitment(id: string): Promise<void> {
       console.warn('[Commitments] Cloud delete notice:', err);
     }
   }
+}
+
+// --------------------------------------------------------------------------
+// WAREHOUSE DAILY REMINDERS & TO-DO OPERATIONS
+// --------------------------------------------------------------------------
+
+export function getPendingRemindersCount(): number {
+  return getLocalPendingReminderOps().length;
+}
+
+export async function fetchReminders(forceRefresh = false): Promise<WarehouseReminder[]> {
+  if (forceRefresh && getSupabaseClient()) {
+    await fetchOrders(true);
+  }
+  return sortReminders(getLocalReminders());
+}
+
+export function subscribeToReminders(callback: ReminderListener): () => void {
+  reminderListeners.add(callback);
+  return () => {
+    reminderListeners.delete(callback);
+  };
+}
+
+async function upsertReminderInCloud(reminder: WarehouseReminder): Promise<boolean> {
+  const supabase = getSupabaseClient();
+  const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+  if (!supabase || !isOnline) return false;
+
+  try {
+    const payload = {
+      customer_reference: encodeReminderHeaderMeta(reminder),
+      warehouse_location: reminder.warehouse_location === 'DEPOSITO' ? 'DEPOSITO' : 'MAGAZZINO',
+      status: reminder.status === 'COMPLETATO' ? 'COMPLETATO' : 'NUOVO',
+      updated_at: reminder.updated_at,
+    };
+
+    const { data: updatedRows, error: updateErr } = await supabase
+      .from('orders')
+      .update(payload)
+      .eq('id', reminder.id)
+      .select('id');
+
+    if (updateErr) {
+      console.warn('[Reminders] Cloud update notice:', updateErr);
+      return false;
+    }
+
+    if (updatedRows && updatedRows.length > 0) {
+      return true;
+    }
+
+    const { error: insertErr } = await supabase.from('orders').upsert(
+      {
+        id: reminder.id,
+        order_number: '',
+        ...payload,
+        document_type: 'NOTA_PRELIEVO',
+        created_at: reminder.created_at,
+      },
+      { onConflict: 'id', ignoreDuplicates: true }
+    );
+
+    if (insertErr) {
+      console.warn('[Reminders] Cloud insert notice:', insertErr);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('[Reminders] Cloud sync error:', err);
+    return false;
+  }
+}
+
+export interface SaveWarehouseReminderInput {
+  title: string;
+  description?: string | null;
+  category: ReminderCategory;
+  due_date: string;
+  due_time?: string | null;
+  priority: ReminderPriority;
+  warehouse_location: ReminderLocationScope;
+  customer_reference?: string | null;
+  created_by?: string | null;
+}
+
+export async function createWarehouseReminder(
+  input: SaveWarehouseReminderInput
+): Promise<WarehouseReminder> {
+  const title = input.title.trim();
+  if (!title) {
+    throw new Error('Inserisci il titolo o la descrizione breve del promemoria.');
+  }
+
+  const now = new Date().toISOString();
+  const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(input.due_date || '')
+    ? input.due_date
+    : getLocalDateKey();
+
+  const newReminder: WarehouseReminder = {
+    id: crypto.randomUUID(),
+    title,
+    description: input.description?.trim() || null,
+    category: input.category,
+    due_date: dueDate,
+    due_time: input.due_time?.trim() || null,
+    priority: input.priority,
+    warehouse_location: input.warehouse_location,
+    customer_reference: input.customer_reference?.trim() || null,
+    status: 'DA_FARE',
+    created_by: input.created_by?.trim() || null,
+    completed_by: null,
+    completed_at: null,
+    completion_note: null,
+    created_at: now,
+    updated_at: now,
+  };
+
+  const nextList = sortReminders([newReminder, ...getLocalReminders()]);
+  saveLocalReminders(nextList);
+  reminderListeners.forEach(l => l(nextList));
+  broadcastChannel?.postMessage({ type: 'REMINDERS_UPDATED' });
+
+  enqueuePendingReminderOp({ id: newReminder.id, op: 'UPSERT', reminder: newReminder });
+  const synced = await upsertReminderInCloud(newReminder);
+  if (synced) {
+    clearPendingReminderOp(newReminder.id);
+  }
+
+  return newReminder;
+}
+
+export async function updateWarehouseReminder(
+  id: string,
+  input: SaveWarehouseReminderInput
+): Promise<WarehouseReminder> {
+  const title = input.title.trim();
+  if (!title) {
+    throw new Error('Inserisci il titolo del promemoria.');
+  }
+
+  const current = getLocalReminders();
+  const existing = current.find(r => r.id === id);
+  if (!existing) {
+    throw new Error('Promemoria non trovato.');
+  }
+
+  const now = new Date().toISOString();
+  const updated: WarehouseReminder = {
+    ...existing,
+    title,
+    description: input.description?.trim() || null,
+    category: input.category,
+    due_date: /^\d{4}-\d{2}-\d{2}$/.test(input.due_date || '') ? input.due_date : existing.due_date,
+    due_time: input.due_time?.trim() || null,
+    priority: input.priority,
+    warehouse_location: input.warehouse_location,
+    customer_reference: input.customer_reference?.trim() || null,
+    created_by: input.created_by?.trim() || existing.created_by || null,
+    updated_at: now,
+  };
+
+  const nextList = sortReminders(current.map(r => (r.id === id ? updated : r)));
+  saveLocalReminders(nextList);
+  reminderListeners.forEach(l => l(nextList));
+  broadcastChannel?.postMessage({ type: 'REMINDERS_UPDATED' });
+
+  enqueuePendingReminderOp({ id, op: 'UPSERT', reminder: updated });
+  const synced = await upsertReminderInCloud(updated);
+  if (synced) {
+    clearPendingReminderOp(id);
+  }
+
+  return updated;
+}
+
+export async function completeWarehouseReminder(
+  id: string,
+  input: { completedBy: string; completionNote?: string | null }
+): Promise<WarehouseReminder> {
+  const completedBy = input.completedBy.trim();
+  if (!completedBy) {
+    throw new Error("Inserisci il nome dell'operatore che ha completato l'attività.");
+  }
+
+  const current = getLocalReminders();
+  const existing = current.find(r => r.id === id);
+  if (!existing) {
+    throw new Error('Promemoria non trovato.');
+  }
+
+  const now = new Date().toISOString();
+  const updated: WarehouseReminder = {
+    ...existing,
+    status: 'COMPLETATO',
+    completed_by: completedBy,
+    completed_at: now,
+    completion_note: input.completionNote?.trim() || null,
+    updated_at: now,
+  };
+
+  const nextList = sortReminders(current.map(r => (r.id === id ? updated : r)));
+  saveLocalReminders(nextList);
+  reminderListeners.forEach(l => l(nextList));
+  broadcastChannel?.postMessage({ type: 'REMINDERS_UPDATED' });
+
+  enqueuePendingReminderOp({ id, op: 'UPSERT', reminder: updated });
+  const synced = await upsertReminderInCloud(updated);
+  if (synced) {
+    clearPendingReminderOp(id);
+  }
+
+  return updated;
+}
+
+export async function reopenWarehouseReminder(id: string): Promise<WarehouseReminder> {
+  const current = getLocalReminders();
+  const existing = current.find(r => r.id === id);
+  if (!existing) {
+    throw new Error('Promemoria non trovato.');
+  }
+
+  const now = new Date().toISOString();
+  const updated: WarehouseReminder = {
+    ...existing,
+    status: 'DA_FARE',
+    completed_by: null,
+    completed_at: null,
+    completion_note: null,
+    updated_at: now,
+  };
+
+  const nextList = sortReminders(current.map(r => (r.id === id ? updated : r)));
+  saveLocalReminders(nextList);
+  reminderListeners.forEach(l => l(nextList));
+  broadcastChannel?.postMessage({ type: 'REMINDERS_UPDATED' });
+
+  enqueuePendingReminderOp({ id, op: 'UPSERT', reminder: updated });
+  const synced = await upsertReminderInCloud(updated);
+  if (synced) {
+    clearPendingReminderOp(id);
+  }
+
+  return updated;
+}
+
+export async function deleteWarehouseReminder(id: string): Promise<void> {
+  const nextList = getLocalReminders().filter(r => r.id !== id);
+  saveLocalReminders(nextList);
+  reminderListeners.forEach(l => l(nextList));
+  broadcastChannel?.postMessage({ type: 'REMINDERS_UPDATED' });
+
+  const now = new Date().toISOString();
+  enqueuePendingReminderOp({ id, op: 'DELETE', archivedAt: now });
+
+  const supabase = getSupabaseClient();
+  const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+  if (supabase && isOnline) {
+    try {
+      const { error } = await supabase
+        .from('orders')
+        .update({ archived_at: now, updated_at: now })
+        .eq('id', id);
+      if (!error) {
+        clearPendingReminderOp(id);
+      }
+    } catch (err) {
+      console.warn('[Reminders] Cloud delete notice:', err);
+    }
+  }
+}
+
+let pendingReminderSyncPromise: Promise<number> | null = null;
+
+export async function syncPendingReminders(): Promise<number> {
+  if (pendingReminderSyncPromise) return pendingReminderSyncPromise;
+
+  pendingReminderSyncPromise = (async () => {
+    const pendingOps = getLocalPendingReminderOps();
+    if (pendingOps.length === 0) return 0;
+
+    const supabase = getSupabaseClient();
+    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    if (!supabase || !isOnline) return 0;
+
+    let synced = 0;
+    const remaining: PendingReminderOp[] = [];
+
+    for (const op of pendingOps) {
+      try {
+        if (op.op === 'DELETE') {
+          const { error } = await supabase
+            .from('orders')
+            .update({ archived_at: op.archivedAt, updated_at: op.archivedAt })
+            .eq('id', op.id);
+          if (error) {
+            remaining.push(op);
+          } else {
+            synced++;
+          }
+        } else {
+          const ok = await upsertReminderInCloud(op.reminder);
+          if (ok) synced++;
+          else remaining.push(op);
+        }
+      } catch {
+        remaining.push(op);
+      }
+    }
+
+    saveLocalPendingReminderOps(remaining);
+    return synced;
+  })();
+
+  return pendingReminderSyncPromise.finally(() => {
+    pendingReminderSyncPromise = null;
+  });
 }
 
 // --------------------------------------------------------------------------

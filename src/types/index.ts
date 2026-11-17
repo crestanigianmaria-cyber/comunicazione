@@ -122,14 +122,42 @@ export interface CustomerCommitment {
   items: CommitmentItem[];
 }
 
+export type ReminderCategory = 'ATTIVITA' | 'ORDINE_DA_PREPARARE';
+
+export type ReminderPriority = 'NORMALE' | 'URGENTE';
+
+export type ReminderStatus = 'DA_FARE' | 'COMPLETATO';
+
+export type ReminderLocationScope = 'MAGAZZINO' | 'DEPOSITO' | 'ENTRAMBI';
+
+export interface WarehouseReminder {
+  id: string;
+  title: string;
+  description?: string | null;
+  category: ReminderCategory;
+  due_date: string; // Local calendar date YYYY-MM-DD
+  due_time?: string | null; // Optional HH:mm
+  priority: ReminderPriority;
+  warehouse_location: ReminderLocationScope;
+  customer_reference?: string | null;
+  status: ReminderStatus;
+  created_by?: string | null;
+  completed_by?: string | null;
+  completed_at?: string | null;
+  completion_note?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export type AppView =
   | 'magazzino'
+  | 'magazzino_promemoria'
   | 'magazzino_impegni'
   | 'magazzino_storico'
   | 'ufficio_dashboard'
+  | 'ufficio_promemoria'
   | 'ufficio_impegni'
   | 'ufficio_storico'
   | 'ufficio_cestino'
   | 'ufficio_catalogo'
   | 'ufficio_impostazioni';
-

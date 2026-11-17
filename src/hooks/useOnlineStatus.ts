@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getPendingOrdersCount, syncPendingOrders } from '../services/db';
+import {
+  getPendingOrdersCount,
+  getPendingRemindersCount,
+  syncPendingOrders,
+  syncPendingReminders,
+} from '../services/db';
 
 export function useOnlineStatus() {
   const [isOnline, setIsOnline] = useState(
@@ -17,7 +22,10 @@ export function useOnlineStatus() {
 
     setIsSyncing(true);
     try {
-      const result = await syncPendingOrders();
+      const [result] = await Promise.all([
+        syncPendingOrders(),
+        syncPendingReminders().catch(() => 0),
+      ]);
       setPendingCount(result.remaining);
       if (result.errors.length > 0) {
         setSyncMessage(result.errors.slice(0, 2).join(' • '));
@@ -61,11 +69,15 @@ export function useOnlineStatus() {
 
     // Retry on startup and periodically: a browser "online" event does not
     // guarantee that Supabase is already reachable.
-    if (navigator.onLine && getPendingOrdersCount() > 0) void runSync();
+    if (navigator.onLine && (getPendingOrdersCount() > 0 || getPendingRemindersCount() > 0)) {
+      void runSync();
+    }
 
     const interval = window.setInterval(() => {
       updatePending();
-      if (navigator.onLine && getPendingOrdersCount() > 0) void runSync();
+      if (navigator.onLine && (getPendingOrdersCount() > 0 || getPendingRemindersCount() > 0)) {
+        void runSync();
+      }
     }, 15000);
 
     return () => {

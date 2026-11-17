@@ -13,6 +13,7 @@ import {
   PlusCircle,
   ClipboardList,
   QrCode,
+  ListTodo,
 } from 'lucide-react';
 import { UserRole, CompanySettings, AppView } from '../../types';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -30,6 +31,7 @@ interface HeaderProps {
   onEnableNotifications: () => void;
   newOrdersCount: number;
   activeCommitmentsCount?: number;
+  pendingTodayRemindersCount?: number;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -44,6 +46,7 @@ export const Header: React.FC<HeaderProps> = ({
   onEnableNotifications,
   newOrdersCount,
   activeCommitmentsCount = 0,
+  pendingTodayRemindersCount = 0,
 }) => {
   const [soundOn, setSoundOn] = React.useState(isSoundEnabled());
 
@@ -232,6 +235,29 @@ export const Header: React.FC<HeaderProps> = ({
                   {newOrdersCount > 0 && (
                     <span className="inline-flex min-w-5 h-5 px-1.5 items-center justify-center rounded-full bg-red-600 text-white text-[10px] font-mono font-black">
                       {newOrdersCount}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => onNavigate('ufficio_promemoria')}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap ${
+                    activeView === 'ufficio_promemoria'
+                      ? 'bg-white text-slate-950 font-extrabold shadow-xs'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-900'
+                  }`}
+                >
+                  <ListTodo className="w-4 h-4 text-amber-400" />
+                  <span>Promemoria</span>
+                  {pendingTodayRemindersCount > 0 && (
+                    <span
+                      className={`inline-flex min-w-5 h-5 px-1.5 items-center justify-center rounded-full text-[10px] font-mono font-black ${
+                        activeView === 'ufficio_promemoria'
+                          ? 'bg-amber-500 text-slate-950'
+                          : 'bg-amber-400 text-slate-950'
+                      }`}
+                    >
+                      {pendingTodayRemindersCount}
                     </span>
                   )}
                 </button>
