@@ -3,6 +3,8 @@ import {
   Building2,
   Lock,
   ArrowRight,
+  ArrowUpRight,
+  CalendarRange,
   ShieldCheck,
   Warehouse,
   Eye,
@@ -255,8 +257,55 @@ export const LoginModal: React.FC<LoginModalProps> = ({
             </button>
           </form>
 
+          {/* Integrated Suite Switcher -> Saggin Planning */}
+          <div className="mt-5 pt-4 border-t border-slate-100">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
+                Suite Aziendale Saggin
+              </span>
+              <span className="inline-flex items-center gap-1 text-[10px] font-mono font-bold text-slate-400">
+                <CalendarRange className="w-3 h-3 text-red-500" />
+                <span>Ufficio &amp; Viaggi</span>
+              </span>
+            </div>
+
+            <a
+              href="https://sagginplanning.vercel.app"
+              className="group w-full min-h-[62px] px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50/80 hover:bg-[#0f172a] hover:border-[#0f172a] active:scale-[0.99] transition-all flex items-center justify-between gap-3 touch-manipulation shadow-2xs hover:shadow-md"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-12 h-9 rounded-lg bg-white border border-slate-200 group-hover:border-slate-700 flex items-center justify-center p-1.5 shrink-0 shadow-2xs">
+                  <img
+                    src="/saggin-logo.png"
+                    alt="Saggin Planning"
+                    className="w-full h-full object-contain"
+                    width="48"
+                    height="36"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-xs sm:text-sm font-extrabold text-slate-900 group-hover:text-white transition-colors truncate">
+                      Saggin Planning
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 group-hover:bg-red-600 group-hover:text-white text-[9px] font-mono font-black uppercase tracking-wider transition-colors shrink-0">
+                      PLANNING
+                    </span>
+                  </div>
+                  <p className="text-[11px] font-medium text-slate-500 group-hover:text-slate-300 transition-colors truncate mt-0.5">
+                    Vai a sagginplanning.vercel.app
+                  </p>
+                </div>
+              </div>
+
+              <div className="w-9 h-9 rounded-lg bg-white border border-slate-200 group-hover:bg-red-600 group-hover:border-red-600 text-slate-600 group-hover:text-white flex items-center justify-center shrink-0 transition-colors shadow-2xs">
+                <ArrowUpRight className="w-4 h-4 stroke-[2.5]" />
+              </div>
+            </a>
+          </div>
+
           {/* Footer info */}
-          <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+          <div className="mt-4 pt-3.5 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
             <span className="inline-flex items-center gap-1.5 font-semibold text-slate-500">
               <ShieldCheck className="w-4 h-4 text-emerald-600" />
               Sincronizzazione Cloud Supabase
