@@ -367,17 +367,21 @@ export async function renderCommitmentDymoCanvas(
   return canvas;
 }
 
+export type DymoOrientation = 'vertical' | 'horizontal';
+
 /**
  * Renders a crisp 300-DPI thermal DYMO label for a single Catalog Product.
  */
 export async function renderProductDymoCanvas(
   product: Product,
-  formatId: DymoLabelSizeId = '70x54'
+  formatId: DymoLabelSizeId = '70x54',
+  orientation: DymoOrientation = 'vertical'
 ): Promise<HTMLCanvasElement> {
   const fmt = DYMO_LABEL_FORMATS.find((f) => f.id === formatId) || DYMO_LABEL_FORMATS[0]; // default 70x54
   const PX_PER_MM = 12;
-  const W = Math.round(fmt.widthMm * PX_PER_MM);
-  const H = Math.round(fmt.heightMm * PX_PER_MM);
+  const isVertical99015 = fmt.id === '70x54' && orientation === 'vertical';
+  const W = Math.round((isVertical99015 ? fmt.heightMm : fmt.widthMm) * PX_PER_MM);
+  const H = Math.round((isVertical99015 ? fmt.widthMm : fmt.heightMm) * PX_PER_MM);
 
   const sagginImg = await loadSagginLogo();
   const canvas = document.createElement('canvas');
@@ -390,8 +394,60 @@ export async function renderProductDymoCanvas(
 
   const pad = Math.round(2 * PX_PER_MM);
 
+  if (isVertical99015) {
+    // Vertical 54 x 70 mm: Top header bar (Saggin logo + code) -> Centered large QR -> Wrapped description
+    const barH = Math.round(8 * PX_PER_MM);
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(pad, pad, W - pad * 2, barH);
+
+    let codeX = pad + Math.round(1.4 * PX_PER_MM);
+    if (sagginImg) {
+      const sh = Math.round(barH * 0.72);
+      const sw = (sagginImg.width / sagginImg.height) * sh;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(codeX - 2, pad + (barH - sh) / 2 - 2, sw + 4, sh + 4);
+      ctx.drawImage(sagginImg, codeX, pad + (barH - sh) / 2, sw, sh);
+      codeX += sw + Math.round(1.5 * PX_PER_MM);
+    }
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `900 ${Math.round(barH * 0.52)}px "JetBrains Mono", monospace`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(product.code.trim(), codeX, pad + barH / 2, W - pad - codeX - 6);
+
+    // Large centered QR (35 x 35 mm)
+    const qrSize = Math.round(35 * PX_PER_MM);
+    const qrY = pad + barH + Math.round(2.5 * PX_PER_MM);
+    const qrCanvas = document.createElement('canvas');
+    await QRCode.toCanvas(qrCanvas, product.code.trim(), {
+      width: qrSize,
+      margin: 2,
+      errorCorrectionLevel: 'M',
+      color: { dark: '#000000', light: '#ffffff' },
+    });
+    ctx.drawImage(qrCanvas, Math.round((W - qrSize) / 2), qrY, qrSize, qrSize);
+
+    // Bottom wrapped description
+    const descY = qrY + qrSize + Math.round(2.2 * PX_PER_MM);
+    const descW = W - pad * 2;
+    const descFont = Math.round(3.6 * PX_PER_MM);
+    ctx.fillStyle = '#000000';
+    ctx.font = `800 ${descFont}px "Plus Jakarta Sans", Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+
+    const lines = wrapDymoText(ctx, product.description, descW);
+    const lineH = Math.round(descFont * 1.18);
+    lines.slice(0, 4).forEach((l, i) => {
+      ctx.fillText(l, W / 2, descY + i * lineH, descW);
+    });
+
+    return canvas;
+  }
+
   if (fmt.id === '70x54') {
-    // Full-width top code bar
+    // Horizontal 70 x 54 mm: Full-width top code bar
     const barH = Math.round(8.5 * PX_PER_MM);
     ctx.fillStyle = '#000000';
     ctx.fillRect(pad, pad, W - pad * 2, barH);
@@ -535,21 +591,21 @@ export const DYMO_PRODUCT_LAYOUTS: {
     label: '1 per etichetta (Singola)',
     shortLabel: '1× Singola',
     slotsPerLabel: 1,
-    description: '1 etichetta grande 70×54 mm · Logo Saggin, QR 31×31 mm e descrizione completa',
+    description: '1 etichetta grande · Logo Saggin, QR grande e descrizione completa',
   },
   {
     id: '2_medium',
     label: '2 per etichetta (Media)',
     shortLabel: '2× Media',
     slotsPerLabel: 2,
-    description: '2 etichette medie (68×25 mm) su ogni 70×54 · Logo Saggin, QR 21×21 mm e descrizione',
+    description: '2 etichette medie su ogni 99015 · Logo Saggin, QR 21×21 mm e descrizione',
   },
   {
     id: '6_ferramenta',
     label: '6 per etichetta (Ferramenta)',
     shortLabel: '6× Ferramenta',
     slotsPerLabel: 6,
-    description: '6 mini-etichette (22×25 mm, QR 13.5×13.5 mm) su ogni 70×54 · Logo Saggin, QR e descrizione',
+    description: '6 mini-etichette su ogni 99015 · Logo Saggin, QR e descrizione',
   },
 ];
 
@@ -575,23 +631,25 @@ function wrapDymoText(
 }
 
 /**
- * Renders 1, 2, or 6 product labels onto a single DYMO 99015 (70 x 54 mm) canvas
+ * Renders 1, 2, or 6 product labels onto a single DYMO 99015 canvas (54 x 70 mm vertical or 70 x 54 mm horizontal)
  * in pure high-contrast B&W (#000000 on #ffffff) for crisp thermal printing.
  * Every format includes Saggin logo, unobstructed QR code, code, and description.
  */
 export async function renderProductDymoSheetCanvas(
   products: Product[],
   layout: DymoProductLayout,
-  formatId: DymoLabelSizeId = '70x54'
+  formatId: DymoLabelSizeId = '70x54',
+  orientation: DymoOrientation = 'vertical'
 ): Promise<HTMLCanvasElement> {
   if (layout === '1_single' && products[0]) {
-    return renderProductDymoCanvas(products[0], formatId);
+    return renderProductDymoCanvas(products[0], formatId, orientation);
   }
 
   const fmt = DYMO_LABEL_FORMATS.find((f) => f.id === formatId) || DYMO_LABEL_FORMATS[0];
   const PX_PER_MM = 12;
-  const W = Math.round(fmt.widthMm * PX_PER_MM);
-  const H = Math.round(fmt.heightMm * PX_PER_MM);
+  const isVertical99015 = fmt.id === '70x54' && orientation === 'vertical';
+  const W = Math.round((isVertical99015 ? fmt.heightMm : fmt.widthMm) * PX_PER_MM);
+  const H = Math.round((isVertical99015 ? fmt.widthMm : fmt.heightMm) * PX_PER_MM);
 
   const sagginImg = await loadSagginLogo();
   const canvas = document.createElement('canvas');
@@ -605,7 +663,7 @@ export async function renderProductDymoSheetCanvas(
   const pad = Math.round(1.5 * PX_PER_MM);
 
   if (layout === '2_medium') {
-    // 2 horizontal medium labels stacked vertically (1 col x 2 rows)
+    // 2 medium labels stacked vertically (1 col x 2 rows)
     const rows = 2;
     const cellW = W - pad * 2;
     const gapY = Math.round(1.5 * PX_PER_MM);
@@ -622,59 +680,112 @@ export async function renderProductDymoSheetCanvas(
       ctx.rect(x, y, cellW, cellH);
       ctx.clip();
 
-      // Left: crisp QR (21 x 21 mm)
-      const qrSize = Math.min(cellH - Math.round(2 * PX_PER_MM), Math.round(21 * PX_PER_MM));
-      const qrCanvas = document.createElement('canvas');
-      await QRCode.toCanvas(qrCanvas, prod.code.trim(), {
-        width: qrSize,
-        margin: 2,
-        errorCorrectionLevel: 'M',
-        color: { dark: '#000000', light: '#ffffff' },
-      });
-      const qrY = y + Math.round((cellH - qrSize) / 2);
-      ctx.drawImage(qrCanvas, x + Math.round(1 * PX_PER_MM), qrY, qrSize, qrSize);
+      if (isVertical99015) {
+        // Vertical 54x70 -> each cell is ~51 x 32.5 mm:
+        // Top full-width black bar (Saggin Logo + Code), below: Left QR (21mm) + Right wrapped description
+        const barH = Math.round(5.4 * PX_PER_MM);
+        const barY = y + Math.round(0.8 * PX_PER_MM);
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(x + Math.round(0.6 * PX_PER_MM), barY, cellW - Math.round(1.2 * PX_PER_MM), barH);
 
-      // Right: Black header bar (Saggin Logo + Code) + wrapped description
-      const rightX = x + Math.round(1 * PX_PER_MM) + qrSize + Math.round(2 * PX_PER_MM);
-      const rightW = x + cellW - rightX - Math.round(1 * PX_PER_MM);
-      const barH = Math.round(5.8 * PX_PER_MM);
+        let codeX = x + Math.round(1.6 * PX_PER_MM);
+        if (sagginImg) {
+          const sh = Math.round(barH * 0.72);
+          const sw = (sagginImg.width / sagginImg.height) * sh;
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(codeX - 2, barY + (barH - sh) / 2 - 2, sw + 4, sh + 4);
+          ctx.drawImage(sagginImg, codeX, barY + (barH - sh) / 2, sw, sh);
+          codeX += sw + Math.round(1.4 * PX_PER_MM);
+        }
 
-      ctx.fillStyle = '#000000';
-      ctx.fillRect(rightX, y + Math.round(1 * PX_PER_MM), rightW, barH);
-
-      let codeX = rightX + Math.round(1.2 * PX_PER_MM);
-      if (sagginImg) {
-        const sh = Math.round(barH * 0.72);
-        const sw = (sagginImg.width / sagginImg.height) * sh;
         ctx.fillStyle = '#ffffff';
-        ctx.fillRect(codeX - 2, y + Math.round(1 * PX_PER_MM) + (barH - sh) / 2 - 2, sw + 4, sh + 4);
-        ctx.drawImage(sagginImg, codeX, y + Math.round(1 * PX_PER_MM) + (barH - sh) / 2, sw, sh);
-        codeX += sw + Math.round(1.5 * PX_PER_MM);
+        ctx.font = `900 ${Math.round(barH * 0.56)}px "JetBrains Mono", monospace`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(
+          prod.code.trim(),
+          codeX,
+          barY + barH / 2,
+          x + cellW - Math.round(1.2 * PX_PER_MM) - codeX
+        );
+
+        const bodyY = barY + barH + Math.round(1.4 * PX_PER_MM);
+        const availH = y + cellH - bodyY - Math.round(0.8 * PX_PER_MM);
+        const qrSize = Math.min(availH, Math.round(21.5 * PX_PER_MM));
+        const qrCanvas = document.createElement('canvas');
+        await QRCode.toCanvas(qrCanvas, prod.code.trim(), {
+          width: qrSize,
+          margin: 2,
+          errorCorrectionLevel: 'M',
+          color: { dark: '#000000', light: '#ffffff' },
+        });
+        ctx.drawImage(qrCanvas, x + Math.round(0.8 * PX_PER_MM), bodyY, qrSize, qrSize);
+
+        const rightX = x + Math.round(0.8 * PX_PER_MM) + qrSize + Math.round(1.8 * PX_PER_MM);
+        const rightW = x + cellW - rightX - Math.round(0.8 * PX_PER_MM);
+        const descFont = Math.round(2.9 * PX_PER_MM);
+        ctx.fillStyle = '#000000';
+        ctx.font = `800 ${descFont}px "Plus Jakarta Sans", Arial, sans-serif`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        const lines = wrapDymoText(ctx, prod.description, rightW);
+        const lineH = Math.round(descFont * 1.18);
+        lines.slice(0, 5).forEach((l, idx) => {
+          ctx.fillText(l, rightX, bodyY + idx * lineH, rightW);
+        });
+      } else {
+        // Horizontal 70x54 -> each cell is ~67 x 25 mm
+        const qrSize = Math.min(cellH - Math.round(2 * PX_PER_MM), Math.round(21 * PX_PER_MM));
+        const qrCanvas = document.createElement('canvas');
+        await QRCode.toCanvas(qrCanvas, prod.code.trim(), {
+          width: qrSize,
+          margin: 2,
+          errorCorrectionLevel: 'M',
+          color: { dark: '#000000', light: '#ffffff' },
+        });
+        const qrY = y + Math.round((cellH - qrSize) / 2);
+        ctx.drawImage(qrCanvas, x + Math.round(1 * PX_PER_MM), qrY, qrSize, qrSize);
+
+        const rightX = x + Math.round(1 * PX_PER_MM) + qrSize + Math.round(2 * PX_PER_MM);
+        const rightW = x + cellW - rightX - Math.round(1 * PX_PER_MM);
+        const barH = Math.round(5.8 * PX_PER_MM);
+
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(rightX, y + Math.round(1 * PX_PER_MM), rightW, barH);
+
+        let codeX = rightX + Math.round(1.2 * PX_PER_MM);
+        if (sagginImg) {
+          const sh = Math.round(barH * 0.72);
+          const sw = (sagginImg.width / sagginImg.height) * sh;
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(codeX - 2, y + Math.round(1 * PX_PER_MM) + (barH - sh) / 2 - 2, sw + 4, sh + 4);
+          ctx.drawImage(sagginImg, codeX, y + Math.round(1 * PX_PER_MM) + (barH - sh) / 2, sw, sh);
+          codeX += sw + Math.round(1.5 * PX_PER_MM);
+        }
+
+        ctx.fillStyle = '#ffffff';
+        ctx.font = `900 ${Math.round(barH * 0.56)}px "JetBrains Mono", monospace`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(
+          prod.code.trim(),
+          codeX,
+          y + Math.round(1 * PX_PER_MM) + barH / 2,
+          rightX + rightW - codeX - 4
+        );
+
+        const descY = y + Math.round(1 * PX_PER_MM) + barH + Math.round(1.4 * PX_PER_MM);
+        const descFont = Math.round(3.1 * PX_PER_MM);
+        ctx.fillStyle = '#000000';
+        ctx.font = `800 ${descFont}px "Plus Jakarta Sans", Arial, sans-serif`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        const lines = wrapDymoText(ctx, prod.description, rightW);
+        const lineH = Math.round(descFont * 1.18);
+        lines.slice(0, 3).forEach((l, idx) => {
+          ctx.fillText(l, rightX, descY + idx * lineH, rightW);
+        });
       }
-
-      ctx.fillStyle = '#ffffff';
-      ctx.font = `900 ${Math.round(barH * 0.56)}px "JetBrains Mono", monospace`;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(
-        prod.code.trim(),
-        codeX,
-        y + Math.round(1 * PX_PER_MM) + barH / 2,
-        rightX + rightW - codeX - 4
-      );
-
-      // Description (2-3 wrapped lines)
-      const descY = y + Math.round(1 * PX_PER_MM) + barH + Math.round(1.4 * PX_PER_MM);
-      const descFont = Math.round(3.1 * PX_PER_MM);
-      ctx.fillStyle = '#000000';
-      ctx.font = `800 ${descFont}px "Plus Jakarta Sans", Arial, sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      const lines = wrapDymoText(ctx, prod.description, rightW);
-      const lineH = Math.round(descFont * 1.18);
-      lines.slice(0, 3).forEach((l, idx) => {
-        ctx.fillText(l, rightX, descY + idx * lineH, rightW);
-      });
 
       ctx.restore();
     }
@@ -693,9 +804,11 @@ export async function renderProductDymoSheetCanvas(
     return canvas;
   }
 
-  // '6_ferramenta': 3 cols x 2 rows filling the full 70x54 mm label (~22 x 25.5 mm each)
-  const cols = fmt.widthMm >= 65 ? 3 : 2;
-  const rows = fmt.heightMm >= 48 ? 2 : 1;
+  // '6_ferramenta':
+  // Vertical 54x70 -> 2 cols x 3 rows (~25.5 x 22.3 mm each)
+  // Horizontal 70x54 -> 3 cols x 2 rows (~22.3 x 25.5 mm each)
+  const cols = isVertical99015 ? 2 : fmt.widthMm >= 65 ? 3 : 2;
+  const rows = isVertical99015 ? 3 : fmt.heightMm >= 48 ? 2 : 1;
   const cellW = Math.floor((W - pad * 2) / cols);
   const cellH = Math.floor((H - pad * 2) / rows);
   const startX = Math.round((W - cellW * cols) / 2);
@@ -709,7 +822,7 @@ export async function renderProductDymoSheetCanvas(
     const row = Math.floor(i / cols);
     const x = startX + col * cellW;
     const y = startY + row * cellH;
-    const innerPad = Math.round(0.9 * PX_PER_MM);
+    const innerPad = Math.round(0.8 * PX_PER_MM);
     const innerW = cellW - innerPad * 2;
 
     ctx.save();
@@ -717,24 +830,24 @@ export async function renderProductDymoSheetCanvas(
     ctx.rect(x, y, cellW, cellH);
     ctx.clip();
 
-    // Top black bar (3.8 mm) with Saggin Logo + Product Code
-    const barH = Math.round(3.8 * PX_PER_MM);
+    // Top black bar with Saggin Logo + Product Code
+    const barH = Math.round((isVertical99015 ? 3.5 : 3.8) * PX_PER_MM);
     const barY = y + innerPad;
     ctx.fillStyle = '#000000';
     ctx.fillRect(x + innerPad, barY, innerW, barH);
 
-    let codeX = x + innerPad + Math.round(0.8 * PX_PER_MM);
+    let codeX = x + innerPad + Math.round(0.7 * PX_PER_MM);
     if (sagginImg) {
       const sh = Math.round(barH * 0.72);
       const sw = (sagginImg.width / sagginImg.height) * sh;
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(codeX - 1, barY + (barH - sh) / 2 - 1, sw + 2, sh + 2);
       ctx.drawImage(sagginImg, codeX, barY + (barH - sh) / 2, sw, sh);
-      codeX += sw + Math.round(0.9 * PX_PER_MM);
+      codeX += sw + Math.round(0.8 * PX_PER_MM);
     }
 
     ctx.fillStyle = '#ffffff';
-    ctx.font = `900 ${Math.round(2.3 * PX_PER_MM)}px "JetBrains Mono", monospace`;
+    ctx.font = `900 ${Math.round(2.2 * PX_PER_MM)}px "JetBrains Mono", monospace`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillText(
@@ -744,8 +857,8 @@ export async function renderProductDymoSheetCanvas(
       x + innerPad + innerW - codeX - 3
     );
 
-    // Crisp unobstructed QR (13.2 x 13.2 mm = 158 px, <= 2x2 cm)
-    const qrSize = Math.round(13.2 * PX_PER_MM);
+    // Crisp unobstructed QR (12.0 mm in vertical 2x3, 13.2 mm in horizontal 3x2)
+    const qrSize = Math.round((isVertical99015 ? 11.8 : 13.2) * PX_PER_MM);
     const qrCanvas = document.createElement('canvas');
     await QRCode.toCanvas(qrCanvas, prod.code.trim(), {
       width: qrSize,
@@ -754,12 +867,12 @@ export async function renderProductDymoSheetCanvas(
       color: { dark: '#000000', light: '#ffffff' },
     });
     const qrX = x + Math.round((cellW - qrSize) / 2);
-    const qrY = barY + barH + Math.round(0.6 * PX_PER_MM);
+    const qrY = barY + barH + Math.round(0.45 * PX_PER_MM);
     ctx.drawImage(qrCanvas, qrX, qrY, qrSize, qrSize);
 
     // Bottom description (2 wrapped lines in pure black for crisp thermal readability)
-    const descY = qrY + qrSize + Math.round(0.4 * PX_PER_MM);
-    const descFont = Math.round(2.0 * PX_PER_MM);
+    const descY = qrY + qrSize + Math.round(0.35 * PX_PER_MM);
+    const descFont = Math.round((isVertical99015 ? 1.9 : 2.0) * PX_PER_MM);
     ctx.fillStyle = '#000000';
     ctx.font = `800 ${descFont}px "Plus Jakarta Sans", Arial, sans-serif`;
     ctx.textAlign = 'center';
@@ -798,9 +911,10 @@ export async function renderProductDymoSheetCanvas(
 
 export async function renderDymoFerramentaSheetCanvas(
   products: Product[],
-  formatId: DymoLabelSizeId = '70x54'
+  formatId: DymoLabelSizeId = '70x54',
+  orientation: DymoOrientation = 'vertical'
 ): Promise<HTMLCanvasElement> {
-  return renderProductDymoSheetCanvas(products, '6_ferramenta', formatId);
+  return renderProductDymoSheetCanvas(products, '6_ferramenta', formatId, orientation);
 }
 
 /**
@@ -815,17 +929,23 @@ export async function printViaDymoWebService(
   const fmt = DYMO_LABEL_FORMATS.find((f) => f.id === formatId) || DYMO_LABEL_FORMATS[0];
   const base64Png = labelCanvas.toDataURL('image/png').replace(/^data:image\/png;base64,/, '');
 
+  const isPortrait = labelCanvas.height > labelCanvas.width;
+  const effWidthMm = isPortrait ? Math.min(fmt.widthMm, fmt.heightMm) : Math.max(fmt.widthMm, fmt.heightMm);
+  const effHeightMm = isPortrait ? Math.max(fmt.widthMm, fmt.heightMm) : Math.min(fmt.widthMm, fmt.heightMm);
+
   // Convert mm to twips (1 mm = 56.692913 twips)
-  const wTwips = Math.round(fmt.widthMm * 56.692913);
-  const hTwips = Math.round(fmt.heightMm * 56.692913);
+  const wTwips = Math.round(effWidthMm * 56.692913);
+  const hTwips = Math.round(effHeightMm * 56.692913);
+  const rollNarrowTwips = Math.round(Math.min(fmt.widthMm, fmt.heightMm) * 56.692913);
+  const rollLongTwips = Math.round(Math.max(fmt.widthMm, fmt.heightMm) * 56.692913);
 
   const labelXml = `<?xml version="1.0" encoding="utf-8"?>
 <DieCutLabel Version="8.0" Units="twips">
-  <PaperOrientation>Landscape</PaperOrientation>
+  <PaperOrientation>${isPortrait ? 'Portrait' : 'Landscape'}</PaperOrientation>
   <Id>Custom</Id>
   <PaperName>${fmt.dymoPaperName}</PaperName>
   <DrawCommands>
-    <RoundRectangle X="0" Y="0" Width="${hTwips}" Height="${wTwips}" Rx="180" Ry="180" />
+    <RoundRectangle X="0" Y="0" Width="${rollNarrowTwips}" Height="${rollLongTwips}" Rx="180" Ry="180" />
   </DrawCommands>
   <ObjectInfo>
     <ImageObject>
@@ -881,6 +1001,9 @@ export function printDymoViaBrowserDriver(
   copies = 1
 ): void {
   const fmt = DYMO_LABEL_FORMATS.find((f) => f.id === formatId) || DYMO_LABEL_FORMATS[0];
+  const isPortrait = labelCanvas.height > labelCanvas.width;
+  const effWidthMm = isPortrait ? Math.min(fmt.widthMm, fmt.heightMm) : Math.max(fmt.widthMm, fmt.heightMm);
+  const effHeightMm = isPortrait ? Math.max(fmt.widthMm, fmt.heightMm) : Math.min(fmt.widthMm, fmt.heightMm);
   const dataUrl = labelCanvas.toDataURL('image/png');
 
   const existing = document.getElementById('saggin-dymo-print-iframe');
@@ -909,12 +1032,12 @@ export function printDymoViaBrowserDriver(
 <head>
   <title>Stampa DYMO ${fmt.name}</title>
   <style>
-    @page { size: ${fmt.widthMm}mm ${fmt.heightMm}mm; margin: 0mm; }
+    @page { size: ${effWidthMm}mm ${effHeightMm}mm; margin: 0mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { width: ${fmt.widthMm}mm; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .dymo-label { width: ${fmt.widthMm}mm; height: ${fmt.heightMm}mm; page-break-after: always; break-after: page; overflow: hidden; }
+    html, body { width: ${effWidthMm}mm; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .dymo-label { width: ${effWidthMm}mm; height: ${effHeightMm}mm; page-break-after: always; break-after: page; overflow: hidden; }
     .dymo-label:last-child { page-break-after: auto; break-after: auto; }
-    .dymo-label img { width: ${fmt.widthMm}mm; height: ${fmt.heightMm}mm; display: block; object-fit: contain; }
+    .dymo-label img { width: ${effWidthMm}mm; height: ${effHeightMm}mm; display: block; object-fit: contain; }
   </style>
 </head>
 <body>
@@ -948,6 +1071,10 @@ export async function printDymoCanvasesBatch(
   }
 
   const fmt = DYMO_LABEL_FORMATS.find((f) => f.id === formatId) || DYMO_LABEL_FORMATS[0];
+  const isPortrait = canvases[0].height > canvases[0].width;
+  const effWidthMm = isPortrait ? Math.min(fmt.widthMm, fmt.heightMm) : Math.max(fmt.widthMm, fmt.heightMm);
+  const effHeightMm = isPortrait ? Math.max(fmt.widthMm, fmt.heightMm) : Math.min(fmt.widthMm, fmt.heightMm);
+
   const existing = document.getElementById('saggin-dymo-print-iframe');
   if (existing) existing.remove();
 
@@ -974,12 +1101,12 @@ export async function printDymoCanvasesBatch(
 <head>
   <title>Stampa DYMO ${fmt.name}</title>
   <style>
-    @page { size: ${fmt.widthMm}mm ${fmt.heightMm}mm; margin: 0mm; }
+    @page { size: ${effWidthMm}mm ${effHeightMm}mm; margin: 0mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { width: ${fmt.widthMm}mm; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-    .dymo-label { width: ${fmt.widthMm}mm; height: ${fmt.heightMm}mm; page-break-after: always; break-after: page; overflow: hidden; }
+    html, body { width: ${effWidthMm}mm; background: #fff; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .dymo-label { width: ${effWidthMm}mm; height: ${effHeightMm}mm; page-break-after: always; break-after: page; overflow: hidden; }
     .dymo-label:last-child { page-break-after: auto; break-after: auto; }
-    .dymo-label img { width: ${fmt.widthMm}mm; height: ${fmt.heightMm}mm; display: block; object-fit: contain; }
+    .dymo-label img { width: ${effWidthMm}mm; height: ${effHeightMm}mm; display: block; object-fit: contain; }
   </style>
 </head>
 <body>

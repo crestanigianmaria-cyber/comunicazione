@@ -33,6 +33,7 @@ import {
   printDymoCanvasesBatch,
   DYMO_PRODUCT_LAYOUTS,
   DymoProductLayout,
+  DymoOrientation,
 } from '../../lib/dymoPrinter';
 
 interface BatchQrPrintModalProps {
@@ -53,6 +54,7 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
   // Target mode: A4 vs DYMO 99015 (70x54 mm)
   const [printTarget, setPrintTarget] = useState<'A4' | 'DYMO'>('A4');
   const [dymoLayout, setDymoLayout] = useState<DymoProductLayout>('6_ferramenta');
+  const [dymoOrientation, setDymoOrientation] = useState<DymoOrientation>('vertical');
 
   // Print & Layout options (A4)
   const [presetId, setPresetId] = useState<QrSheetPresetId>('qr_3x3_20');
@@ -158,7 +160,7 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
 
     const renderPromise =
       printTarget === 'DYMO'
-        ? renderProductDymoSheetCanvas(pageSlice, dymoLayout, '70x54')
+        ? renderProductDymoSheetCanvas(pageSlice, dymoLayout, '70x54', dymoOrientation)
         : renderA4SheetToCanvas(
             pageSlice,
             currentPage,
@@ -182,7 +184,7 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [productsToPrint, currentPage, totalPages, itemsPerPage, renderOptions, printTarget, dymoLayout]);
+  }, [productsToPrint, currentPage, totalPages, itemsPerPage, renderOptions, printTarget, dymoLayout, dymoOrientation]);
 
   // Handle single click, Shift+Click range selection, or drag start
   const handleItemMouseDown = (index: number, code: string, e: React.MouseEvent) => {
@@ -289,7 +291,7 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
       const canvases: HTMLCanvasElement[] = [];
       for (let i = 0; i < productsToPrint.length; i += slots) {
         const chunk = productsToPrint.slice(i, i + slots);
-        const c = await renderProductDymoSheetCanvas(chunk, dymoLayout, '70x54');
+        const c = await renderProductDymoSheetCanvas(chunk, dymoLayout, '70x54', dymoOrientation);
         canvases.push(c);
       }
       await printDymoCanvasesBatch(canvases, '70x54');
@@ -741,7 +743,9 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
                 <div
                   className={`relative bg-white shadow-2xl border border-slate-400 rounded-sm overflow-hidden w-full ${
                     printTarget === 'DYMO'
-                      ? 'max-w-[540px] aspect-[70/54] my-auto rounded-xl border-2'
+                      ? dymoOrientation === 'vertical'
+                        ? 'max-w-[390px] aspect-[54/70] my-auto rounded-xl border-2'
+                        : 'max-w-[540px] aspect-[70/54] my-auto rounded-xl border-2'
                       : 'max-w-[680px] aspect-[210/297]'
                   }`}
                 >

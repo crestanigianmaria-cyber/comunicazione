@@ -14,6 +14,7 @@ import {
   renderProductDymoSheetCanvas,
   DYMO_PRODUCT_LAYOUTS,
   DymoProductLayout,
+  DymoOrientation,
 } from '../../lib/dymoPrinter';
 
 interface ProductQrModalProps {
@@ -29,6 +30,7 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
 }) => {
   const [printMode, setPrintMode] = useState<'DYMO' | 'A4'>('DYMO');
   const [dymoLayout, setDymoLayout] = useState<DymoProductLayout>('1_single');
+  const [dymoOrientation, setDymoOrientation] = useState<DymoOrientation>('vertical');
   const [dymoPreviewUrl, setDymoPreviewUrl] = useState<string>('');
   const [dataUrl, setDataUrl] = useState<string>('');
   const [presetId, setPresetId] = useState<QrSheetPresetId>('qr_3x3_20');
@@ -69,14 +71,14 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
     };
   }, [product]);
 
-  // Render live DYMO 70x54 preview whenever product or layout changes
+  // Render live DYMO 99015 preview whenever product, layout, or orientation changes
   useEffect(() => {
     if (!product || printMode !== 'DYMO') return;
     let isMounted = true;
     const layoutInfo =
       DYMO_PRODUCT_LAYOUTS.find((l) => l.id === dymoLayout) || DYMO_PRODUCT_LAYOUTS[0];
     const items = Array.from({ length: layoutInfo.slotsPerLabel }, () => product);
-    renderProductDymoSheetCanvas(items, dymoLayout, '70x54')
+    renderProductDymoSheetCanvas(items, dymoLayout, '70x54', dymoOrientation)
       .then((canvas) => {
         if (isMounted) setDymoPreviewUrl(canvas.toDataURL('image/png'));
       })
@@ -85,7 +87,7 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [product, printMode, dymoLayout]);
+  }, [product, printMode, dymoLayout, dymoOrientation]);
 
   if (!product) return null;
 
@@ -248,10 +250,35 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
                 ))}
               </div>
 
-              {/* Number of DYMO 70x54 labels to print */}
-              <div className="flex items-center justify-between gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200 text-xs">
-                <span className="font-bold text-slate-700">Etichette DYMO da stampare:</span>
+              {/* Orientation + Number of DYMO labels to print */}
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200 text-xs">
+                <div className="flex items-center gap-1 bg-white p-0.5 rounded-lg border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setDymoOrientation('vertical')}
+                    className={`px-2.5 py-1 rounded-md font-bold text-[11px] transition cursor-pointer ${
+                      dymoOrientation === 'vertical'
+                        ? 'bg-slate-900 text-white'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Verticale 54×70
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDymoOrientation('horizontal')}
+                    className={`px-2.5 py-1 rounded-md font-bold text-[11px] transition cursor-pointer ${
+                      dymoOrientation === 'horizontal'
+                        ? 'bg-slate-900 text-white'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Orizzontale 70×54
+                  </button>
+                </div>
+
                 <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-slate-700 mr-0.5">Copie:</span>
                   {[1, 2, 3, 5, 10].map((n) => (
                     <button
                       key={n}
@@ -269,19 +296,29 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
                 </div>
               </div>
 
-              {/* Live DYMO 70x54 Preview */}
+              {/* Live DYMO 99015 Preview */}
               <div className="flex flex-col items-center p-4 bg-slate-100/80 rounded-xl border border-slate-200">
                 <div className="text-[10px] font-mono font-bold text-slate-500 uppercase mb-2">
-                  Anteprima Reale DYMO 99015 (70 × 54 mm)
+                  Anteprima Reale DYMO 99015 ({dymoOrientation === 'vertical' ? '54 × 70 mm Verticale' : '70 × 54 mm Orizzontale'})
                 </div>
                 {dymoPreviewUrl ? (
                   <img
                     src={dymoPreviewUrl}
                     alt={`Anteprima DYMO ${product.code}`}
-                    className="w-full max-w-[330px] aspect-[70/54] bg-white rounded-lg border-2 border-slate-300 shadow-md object-contain"
+                    className={`w-full bg-white rounded-lg border-2 border-slate-300 shadow-md object-contain ${
+                      dymoOrientation === 'vertical'
+                        ? 'max-w-[240px] aspect-[54/70]'
+                        : 'max-w-[330px] aspect-[70/54]'
+                    }`}
                   />
                 ) : (
-                  <div className="w-full max-w-[330px] aspect-[70/54] bg-white animate-pulse rounded-lg border border-slate-300" />
+                  <div
+                    className={`w-full bg-white animate-pulse rounded-lg border border-slate-300 ${
+                      dymoOrientation === 'vertical'
+                        ? 'max-w-[240px] aspect-[54/70]'
+                        : 'max-w-[330px] aspect-[70/54]'
+                    }`}
+                  />
                 )}
               </div>
             </>
