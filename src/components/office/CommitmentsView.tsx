@@ -103,6 +103,8 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
       setCategory('VELUX');
     } else if (!editingId) {
       setCategory('STANDARD');
+      setInstallerPreset('NONE');
+      setCustomInstaller('');
     }
   };
 
@@ -160,12 +162,13 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
     };
   }, [previewCommitment, printMode, dymoFormat, packagesCount]);
 
-  // Resolved installer string
+  // Resolved installer string — only applicable to VELUX commitments
   const resolvedInstallerName = useMemo(() => {
+    if (category !== 'VELUX') return null;
     if (installerPreset === 'NONE') return null;
     if (installerPreset === 'CUSTOM') return customInstaller.trim() || null;
     return installerPreset;
-  }, [installerPreset, customInstaller]);
+  }, [category, installerPreset, customInstaller]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -482,7 +485,11 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => setCategory('STANDARD')}
+                    onClick={() => {
+                      setCategory('STANDARD');
+                      setInstallerPreset('NONE');
+                      setCustomInstaller('');
+                    }}
                     className={`py-2.5 px-3 rounded-xl text-xs font-extrabold border transition-all flex items-center justify-center gap-2 ${
                       category === 'STANDARD'
                         ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
@@ -546,69 +553,55 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
                 </div>
               </div>
 
-              {/* Installer Selection — clear and prominent for BOTH Normal and VELUX */}
-              <div
-                className={`p-3.5 rounded-xl border space-y-2.5 ${
-                  category === 'VELUX'
-                    ? 'bg-red-50/70 border-red-200/80'
-                    : 'bg-slate-50 border-slate-200'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <label
-                    className={`flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wider ${
-                      category === 'VELUX' ? 'text-[#e30613]' : 'text-slate-700'
-                    }`}
-                  >
-                    <Wrench className="w-3.5 h-3.5" />
-                    <span>
-                      {category === 'VELUX'
-                        ? 'Installatore VELUX'
-                        : "Chi è l'Installatore?"}
+              {/* Installer Selection — ONLY for Reparto VELUX */}
+              {category === 'VELUX' && (
+                <div className="p-3.5 rounded-xl border space-y-2.5 bg-red-50/70 border-red-200/80">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wider text-[#e30613]">
+                      <Wrench className="w-3.5 h-3.5" />
+                      <span>Installatore VELUX</span>
+                    </label>
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      {resolvedInstallerName ? `Selezionato: ${resolvedInstallerName}` : 'Opzionale'}
                     </span>
-                  </label>
-                  <span className="text-[11px] font-semibold text-slate-500">
-                    {resolvedInstallerName ? `Selezionato: ${resolvedInstallerName}` : 'Opzionale'}
-                  </span>
-                </div>
+                  </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                  {(
-                    [
-                      { id: 'NONE', label: 'Nessuno' },
-                      { id: 'Piazza', label: 'Piazza' },
-                      { id: 'Pauletto', label: 'Pauletto' },
-                      { id: 'CUSTOM', label: 'Personalizzato' },
-                    ] as const
-                  ).map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => setInstallerPreset(opt.id)}
-                      className={`py-2 px-2.5 rounded-lg text-xs font-extrabold border transition-all ${
-                        installerPreset === opt.id
-                          ? category === 'VELUX'
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                    {(
+                      [
+                        { id: 'NONE', label: 'Nessuno' },
+                        { id: 'Piazza', label: 'Piazza' },
+                        { id: 'Pauletto', label: 'Pauletto' },
+                        { id: 'CUSTOM', label: 'Personalizzato' },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setInstallerPreset(opt.id)}
+                        className={`py-2 px-2.5 rounded-lg text-xs font-extrabold border transition-all ${
+                          installerPreset === opt.id
                             ? 'bg-[#e30613] text-white border-[#e30613] shadow-xs'
-                            : 'bg-slate-900 text-white border-slate-900 shadow-xs'
-                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
 
-                {installerPreset === 'CUSTOM' && (
-                  <input
-                    type="text"
-                    value={customInstaller}
-                    onChange={(e) => setCustomInstaller(e.target.value)}
-                    placeholder="Scrivi nome installatore personalizzato..."
-                    autoFocus
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500"
-                  />
-                )}
-              </div>
+                  {installerPreset === 'CUSTOM' && (
+                    <input
+                      type="text"
+                      value={customInstaller}
+                      onChange={(e) => setCustomInstaller(e.target.value)}
+                      placeholder="Scrivi nome installatore personalizzato..."
+                      autoFocus
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500"
+                    />
+                  )}
+                </div>
+              )}
 
               {/* Notes / Comments */}
               <div>

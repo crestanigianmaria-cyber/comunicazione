@@ -8,10 +8,12 @@ import {
   FileText,
   Warehouse,
   AlignLeft,
-  Edit3
+  Edit3,
+  UserCheck
 } from 'lucide-react';
 import { Order, OrderStatus, CompanySettings, ORDER_DOCUMENT_LABELS } from '../../types';
 import { updateOrderStatus } from '../../services/db';
+import { CompleteOrderOperatorModal } from './CompleteOrderOperatorModal';
 
 interface OrderDetailModalProps {
   order: Order;
@@ -34,6 +36,7 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
 }) => {
   const [currentOrder, setCurrentOrder] = useState<Order>(order);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [showCompleteOperatorModal, setShowCompleteOperatorModal] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [copiedAll, setCopiedAll] = useState(false);
   const [checkedItemIds, setCheckedItemIds] = useState<Record<string, boolean>>(() => {
@@ -59,6 +62,10 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
 
   const handleStatusChange = async (newStatus: OrderStatus) => {
     if (newStatus === currentOrder.status || isUpdating) return;
+    if (newStatus === 'COMPLETATO') {
+      setShowCompleteOperatorModal(true);
+      return;
+    }
     setIsUpdating(true);
     try {
       const updated = await updateOrderStatus(currentOrder.id, newStatus);
@@ -66,6 +73,18 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
       onOrderUpdated(updated);
     } catch (err) {
       console.error('Failed to change status:', err);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleConfirmComplete = async (operatorName: string) => {
+    setIsUpdating(true);
+    try {
+      const updated = await updateOrderStatus(currentOrder.id, 'COMPLETATO', operatorName);
+      setCurrentOrder(updated);
+      onOrderUpdated(updated);
+      setShowCompleteOperatorModal(false);
     } finally {
       setIsUpdating(false);
     }
@@ -244,6 +263,12 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                   COMPLETATO
                 </button>
               </div>
+              {currentOrder.status === 'COMPLETATO' && currentOrder.completed_by && (
+                <div className="mt-1.5 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-emerald-800">
+                  <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Evaso da: {currentOrder.completed_by}</span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -384,6 +409,14 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
           </button>
         </div>
       </div>
+
+      {showCompleteOperatorModal && (
+        <CompleteOrderOperatorModal
+          order={currentOrder}
+          onCancel={() => setShowCompleteOperatorModal(false)}
+          onConfirm={handleConfirmComplete}
+        />
+      )}
     </div>
   );
 };

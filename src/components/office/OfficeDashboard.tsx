@@ -15,11 +15,13 @@ import {
   FileText,
   AlignLeft,
   ChevronRight,
-  X
+  X,
+  UserCheck
 } from 'lucide-react';
 import { Order, OrderStatus, CompanySettings, Product, ORDER_DOCUMENT_LABELS, WarehouseLocation } from '../../types';
 import { OrderDetailModal } from './OrderDetailModal';
 import { OrderPrintView } from './OrderPrintView';
+import { CompleteOrderOperatorModal } from './CompleteOrderOperatorModal';
 import { updateOrderStatus } from '../../services/db';
 
 interface OfficeDashboardProps {
@@ -53,6 +55,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
 }) => {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [printOrder, setPrintOrder] = useState<Order | null>(null);
+  const [pendingCompleteOrder, setPendingCompleteOrder] = useState<Order | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -138,13 +141,14 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
         const q = searchQuery.toLowerCase().trim();
         const numMatch = order.order_number?.toLowerCase().includes(q);
         const custMatch = order.customer_reference?.toLowerCase().includes(q);
+        const completedByMatch = order.completed_by?.toLowerCase().includes(q);
         const itemMatch = order.items.some(
           it =>
             it.product_code_snapshot?.toLowerCase().includes(q) ||
             it.product_description_snapshot?.toLowerCase().includes(q) ||
             it.manual_description?.toLowerCase().includes(q)
         );
-        if (!numMatch && !custMatch && !itemMatch) return false;
+        if (!numMatch && !custMatch && !completedByMatch && !itemMatch) return false;
       }
 
       return true;
@@ -153,11 +157,23 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
 
   const handleQuickStatusChange = async (e: React.MouseEvent, orderId: string, newStatus: OrderStatus) => {
     e.stopPropagation();
+    if (newStatus === 'COMPLETATO') {
+      const target = orders.find(o => o.id === orderId);
+      if (!target || target.status === 'COMPLETATO') return;
+      setPendingCompleteOrder(target);
+      return;
+    }
     try {
       await updateOrderStatus(orderId, newStatus);
     } catch (err) {
       console.error('Failed to quick change status:', err);
     }
+  };
+
+  const handleConfirmCompleteOrder = async (operatorName: string) => {
+    if (!pendingCompleteOrder) return;
+    await updateOrderStatus(pendingCompleteOrder.id, 'COMPLETATO', operatorName);
+    setPendingCompleteOrder(null);
   };
 
   return (
@@ -675,6 +691,12 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                               {order.status}
                             </span>
                           )}
+                          {order.status === 'COMPLETATO' && order.completed_by && (
+                            <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-[10px] font-bold text-emerald-800">
+                              <UserCheck className="w-3 h-3 text-emerald-600 shrink-0" />
+                              <span>Evaso da: {order.completed_by}</span>
+                            </div>
+                          )}
                         </td>
 
                         {/* Actions */}
@@ -789,6 +811,13 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                       </div>
                     </div>
 
+                    {order.status === 'COMPLETATO' && order.completed_by && (
+                      <div className="inline-flex items-center gap-1 self-start px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-[10px] font-bold text-emerald-800">
+                        <UserCheck className="w-3 h-3 text-emerald-600" />
+                        <span>Evaso da: {order.completed_by}</span>
+                      </div>
+                    )}
+
                     <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-xs">
                       <span className="font-mono font-bold text-slate-600">
                         {productItems.length} {productItems.length === 1 ? 'articolo' : 'articoli'}
@@ -825,6 +854,15 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
           order={printOrder}
           companySettings={companySettings}
           onClose={() => setPrintOrder(null)}
+        />
+      )}
+
+      {/* Office Operator Confirmation Modal for COMPLETATO */}
+      {pendingCompleteOrder && (
+        <CompleteOrderOperatorModal
+          order={pendingCompleteOrder}
+          onCancel={() => setPendingCompleteOrder(null)}
+          onConfirm={handleConfirmCompleteOrder}
         />
       )}
     </div>

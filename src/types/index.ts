@@ -43,6 +43,7 @@ export interface Order {
   document_type?: OrderDocumentType | null; // Document requested for this warehouse order
   warehouse_location?: WarehouseLocation | null; // Selected loading site
   status: OrderStatus;
+  completed_by?: string | null;
   created_at: string;
   updated_at: string;
   archived_at?: string | null;

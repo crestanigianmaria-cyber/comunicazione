@@ -23,6 +23,38 @@ const STORAGE_KEY_PENDING = 'magazzino_pending_orders_v1';
 const STORAGE_KEY_SETTINGS = 'magazzino_company_settings_v1';
 const STORAGE_KEY_COMMITMENTS = 'magazzino_commitments_v1';
 const COMMITMENT_DB_PREFIX = '__SAGGIN_IMP_V1__';
+const ORDER_COMPLETED_BY_MARKER = '__EVASO_DA__:';
+
+function parseOrderCustomerRef(rawRef: string | null | undefined): {
+  customer_reference: string | null;
+  completed_by: string | null;
+} {
+  if (!rawRef) return { customer_reference: null, completed_by: null };
+  const idx = rawRef.indexOf(ORDER_COMPLETED_BY_MARKER);
+  if (idx === -1) {
+    return { customer_reference: rawRef, completed_by: null };
+  }
+  const cleanRef = rawRef.slice(0, idx).trim();
+  const by = rawRef.slice(idx + ORDER_COMPLETED_BY_MARKER.length).trim();
+  return {
+    customer_reference: cleanRef || null,
+    completed_by: by || null,
+  };
+}
+
+function encodeOrderCustomerRef(
+  customerRef: string | null | undefined,
+  completedBy: string | null | undefined
+): string | null {
+  const cleanRef = (customerRef || '').trim();
+  const cleanBy = (completedBy || '').trim();
+  if (!cleanBy) {
+    return cleanRef || null;
+  }
+  return cleanRef
+    ? `${cleanRef} ${ORDER_COMPLETED_BY_MARKER}${cleanBy}`
+    : `${ORDER_COMPLETED_BY_MARKER}${cleanBy}`;
+}
 
 // Clear legacy bloated localStorage products entry to eliminate quota errors
 try {
@@ -526,10 +558,21 @@ export async function fetchOrders(forceRefresh = false): Promise<Order[]> {
       if (ordersErr) {
         console.error('[Orders] Supabase read failed; preserving local cache:', ordersErr);
       } else if (ordersData) {
-        const normalizedOrders = ordersData.map((order: any) => ({
-          ...order,
-          items: Array.isArray(order.items) ? order.items : [],
-        })) as Order[];
+        const normalizedOrders = ordersData.map((order: any) => {
+          if (isCommitmentOrderRow(order)) {
+            return {
+              ...order,
+              items: Array.isArray(order.items) ? order.items : [],
+            };
+          }
+          const parsed = parseOrderCustomerRef(order.customer_reference);
+          return {
+            ...order,
+            customer_reference: parsed.customer_reference,
+            completed_by: parsed.completed_by,
+            items: Array.isArray(order.items) ? order.items : [],
+          };
+        }) as Order[];
         saveLocalOrders(normalizedOrders);
         return normalizedOrders;
       }
@@ -784,7 +827,7 @@ export async function updateExistingOrder(orderId: string, orderInput: {
       await supabase
         .from('orders')
         .update({
-          customer_reference: updatedOrder.customer_reference,
+          customer_reference: encodeOrderCustomerRef(updatedOrder.customer_reference, updatedOrder.completed_by),
           document_type: updatedOrder.document_type,
           warehouse_location: updatedOrder.warehouse_location,
           updated_at: now,
@@ -855,7 +898,11 @@ export async function restoreOrder(orderId: string): Promise<void> {
   broadcastChannel?.postMessage({ type: 'ORDER_UPDATED', payload: { id: orderId, archived_at: null } });
 }
 
-export async function updateOrderStatus(orderId: string, newStatus: OrderStatus): Promise<Order> {
+export async function updateOrderStatus(
+  orderId: string,
+  newStatus: OrderStatus,
+  completedBy?: string | null
+): Promise<Order> {
   const currentOrders = getLocalOrders();
   const targetIndex = currentOrders.findIndex(o => o.id === orderId);
 
@@ -863,10 +910,17 @@ export async function updateOrderStatus(orderId: string, newStatus: OrderStatus)
     throw new Error('Ordine non trovato');
   }
 
+  const existingOrder = currentOrders[targetIndex];
+  const nextCompletedBy =
+    newStatus === 'COMPLETATO'
+      ? (completedBy || '').trim() || existingOrder.completed_by || null
+      : null;
+
   const now = new Date().toISOString();
   const updatedOrder: Order = {
-    ...currentOrders[targetIndex],
+    ...existingOrder,
     status: newStatus,
+    completed_by: nextCompletedBy,
     updated_at: now,
   };
 
@@ -886,7 +940,7 @@ export async function updateOrderStatus(orderId: string, newStatus: OrderStatus)
     fetch(`/api/orders/${orderId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: newStatus }),
+      body: JSON.stringify({ status: newStatus, completed_by: nextCompletedBy }),
     }).catch(err => {
       console.warn('Failed to update status on central server:', err);
     });
@@ -897,7 +951,11 @@ export async function updateOrderStatus(orderId: string, newStatus: OrderStatus)
     try {
       await supabase
         .from('orders')
-        .update({ status: newStatus, updated_at: now })
+        .update({
+          status: newStatus,
+          customer_reference: encodeOrderCustomerRef(updatedOrder.customer_reference, nextCompletedBy),
+          updated_at: now,
+        })
         .eq('id', orderId);
     } catch (err) {
       console.warn('Failed to update status in Supabase:', err);
