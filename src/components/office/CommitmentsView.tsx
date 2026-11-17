@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect } from 'react';
 import {
   CustomerCommitment,
   CommitmentCategory,
-  CommitmentItem,
   Product,
 } from '../../types';
 import {
@@ -16,6 +15,15 @@ import {
   downloadCommitmentPdfA4,
 } from '../../lib/commitmentQr';
 import {
+  DYMO_LABEL_FORMATS,
+  DymoLabelSizeId,
+  DymoPrinterInfo,
+  detectDymoPrinters,
+  renderCommitmentDymoCanvas,
+  printViaDymoWebService,
+  printDymoViaBrowserDriver,
+} from '../../lib/dymoPrinter';
+import {
   QrCode,
   Plus,
   Trash2,
@@ -24,17 +32,16 @@ import {
   Search,
   User,
   Hash,
-  Package,
   Wrench,
   CheckCircle2,
   Edit3,
   X,
-  Sparkles,
   FileDown,
-  ShoppingBag,
   Layers,
-  Check,
   AlertCircle,
+  MessageSquareText,
+  Tag,
+  RefreshCw,
 } from 'lucide-react';
 
 interface CommitmentsViewProps {
@@ -47,9 +54,9 @@ interface CommitmentsViewProps {
 
 type SectionTab = 'ALL' | 'VELUX';
 type InstallerPreset = 'NONE' | 'Piazza' | 'Pauletto' | 'CUSTOM';
+type PrintTargetMode = 'DYMO' | 'A4';
 
 export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
-  products,
   commitments,
   readOnly = false,
   onRefreshCommitments,
@@ -63,7 +70,7 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'ATTIVO' | 'CARICATO'>('ALL');
   const [installerFilter, setInstallerFilter] = useState<string>('ALL');
 
-  // Form states (Office mode)
+  // Form states (Office mode) — streamlined: ONLY Cliente, Numero Impegno, Installatore, Note
   const [editingId, setEditingId] = useState<string | null>(null);
   const [commitmentNumber, setCommitmentNumber] = useState('');
   const [customerName, setCustomerName] = useState('');
@@ -71,18 +78,6 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
   const [installerPreset, setInstallerPreset] = useState<InstallerPreset>('NONE');
   const [customInstaller, setCustomInstaller] = useState('');
   const [notes, setNotes] = useState('');
-  const [items, setItems] = useState<CommitmentItem[]>([]);
-
-  // Catalog search inside form
-  const [catalogSearch, setCatalogSearch] = useState('');
-  const [onlyVeluxCatalog, setOnlyVeluxCatalog] = useState(false);
-
-  // Manual item entry inside form
-  const [showManualRow, setShowManualRow] = useState(false);
-  const [manualCode, setManualCode] = useState('');
-  const [manualDesc, setManualDesc] = useState('');
-  const [manualUm, setManualUm] = useState('PZ');
-  const [manualQty, setManualQty] = useState('1');
 
   const [formError, setFormError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -91,116 +86,85 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
   const [previewCommitment, setPreviewCommitment] = useState<CustomerCommitment | null>(null);
   const [previewDataUrl, setPreviewDataUrl] = useState<string>('');
   const [isRenderingPreview, setIsRenderingPreview] = useState(false);
-  const [printLayout, setPrintLayout] = useState<'1_big' | '2_half' | '4_grid'>('2_half');
+  const [printMode, setPrintMode] = useState<PrintTargetMode>('DYMO');
+  const [printLayout, setPrintLayout] = useState<'1_big' | '2_half' | '4_grid'>('4_grid');
+  const [dymoFormat, setDymoFormat] = useState<DymoLabelSizeId>('101x54');
+  const [dymoPrinters, setDymoPrinters] = useState<DymoPrinterInfo[]>([]);
+  const [selectedDymoPrinter, setSelectedDymoPrinter] = useState<string>('');
+  const [isProbingDymo, setIsProbingDymo] = useState(false);
+  const [dymoStatusMsg, setDymoStatusMsg] = useState<string | null>(null);
   const [packagesCount, setPackagesCount] = useState<number>(1);
   const [isExporting, setIsExporting] = useState(false);
 
-  // Automatically sync form category when switching to VELUX section tab
+  // Switch top section tab cleanly without overwriting custom installer
   const handleSelectSectionTab = (tab: SectionTab) => {
     setSectionTab(tab);
     if (tab === 'VELUX') {
       setCategory('VELUX');
-      setOnlyVeluxCatalog(true);
-      if (installerPreset === 'NONE') {
-        setInstallerPreset('Piazza');
-      }
-    } else {
-      setOnlyVeluxCatalog(false);
+    } else if (!editingId) {
+      setCategory('STANDARD');
     }
   };
 
-  // Generate next automatic commitment number
-  const generateNextCommitmentNumber = () => {
-    const year = new Date().getFullYear();
-    const prefix = category === 'VELUX' ? `VLX-${year}-` : `IMP-${year}-`;
-    let maxNum = 0;
-    for (const c of commitments) {
-      const m = c.commitment_number.match(/(\d+)$/);
-      if (m && m[1]) {
-        const val = parseInt(m[1], 10);
-        if (val > maxNum && val < 999999) maxNum = val;
+  // Probe DYMO Connect Web Service when modal opens in DYMO mode
+  const refreshDymoPrinters = async () => {
+    setIsProbingDymo(true);
+    setDymoStatusMsg(null);
+    try {
+      const found = await detectDymoPrinters();
+      setDymoPrinters(found);
+      if (found.length > 0) {
+        const connected = found.find((p) => p.isConnected) || found[0];
+        setSelectedDymoPrinter(connected.name);
+        setDymoStatusMsg(`Stampante DYMO collegata: ${connected.name}`);
+      } else {
+        setSelectedDymoPrinter('');
       }
+    } finally {
+      setIsProbingDymo(false);
     }
-    setCommitmentNumber(`${prefix}${String(maxNum + 1).padStart(3, '0')}`);
   };
 
-  // Render high-res label preview whenever previewCommitment or packagesCount changes
   useEffect(() => {
-    let cancelled = false;
+    if (previewCommitment && printMode === 'DYMO') {
+      void refreshDymoPrinters();
+    }
+  }, [previewCommitment, printMode]);
+
+  // Render high-res preview image when opening QR Print Modal or switching mode/format
+  useEffect(() => {
     if (!previewCommitment) {
       setPreviewDataUrl('');
       return;
     }
+    let active = true;
     setIsRenderingPreview(true);
-    renderCommitmentLabelCanvas(
-      previewCommitment,
-      packagesCount > 1 ? { current: 1, total: packagesCount } : undefined
-    )
+    const renderTask =
+      printMode === 'DYMO'
+        ? renderCommitmentDymoCanvas(previewCommitment, dymoFormat)
+        : renderCommitmentLabelCanvas(
+            previewCommitment,
+            packagesCount > 1 ? { current: 1, total: packagesCount } : undefined
+          );
+
+    renderTask
       .then((canvas) => {
-        if (!cancelled) {
-          setPreviewDataUrl(canvas.toDataURL('image/png'));
-          setIsRenderingPreview(false);
-        }
+        if (active) setPreviewDataUrl(canvas.toDataURL('image/png'));
       })
-      .catch((err) => {
-        console.error('Error rendering commitment label preview:', err);
-        if (!cancelled) setIsRenderingPreview(false);
+      .finally(() => {
+        if (active) setIsRenderingPreview(false);
       });
+
     return () => {
-      cancelled = true;
+      active = false;
     };
-  }, [previewCommitment, packagesCount]);
+  }, [previewCommitment, printMode, dymoFormat, packagesCount]);
 
-  // Catalog search results for adding items to the commitment
-  const matchingProducts = useMemo(() => {
-    const q = catalogSearch.trim().toLowerCase();
-    if (!q && !onlyVeluxCatalog) return [];
-
-    const tokens = q.split(/\s+/).filter(Boolean);
-    const results: Product[] = [];
-
-    for (let i = 0; i < products.length; i++) {
-      const p = products[i];
-      const hay = `${p.code} ${p.description} ${p.alternative_code || ''}`.toLowerCase();
-
-      if (onlyVeluxCatalog && !hay.includes('velux') && !p.code.toLowerCase().startsWith('vlx')) {
-        continue;
-      }
-
-      if (tokens.length > 0 && !tokens.every((t) => hay.includes(t))) {
-        continue;
-      }
-
-      results.push(p);
-      if (results.length >= 25) break;
-    }
-    return results;
-  }, [products, catalogSearch, onlyVeluxCatalog]);
-
-  // Filtered commitments list
-  const filteredCommitments = useMemo(() => {
-    const q = listSearch.trim().toLowerCase();
-    return commitments.filter((c) => {
-      if (sectionTab === 'VELUX' && c.category !== 'VELUX') return false;
-      if (statusFilter !== 'ALL' && c.status !== statusFilter) return false;
-      if (installerFilter !== 'ALL') {
-        if ((c.installer_name || '').toLowerCase() !== installerFilter.toLowerCase()) {
-          return false;
-        }
-      }
-      if (!q) return true;
-      const hay = `${c.commitment_number} ${c.customer_name} ${c.installer_name || ''} ${
-        c.notes || ''
-      } ${c.items.map((i) => `${i.product_code} ${i.product_description}`).join(' ')}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [commitments, sectionTab, statusFilter, installerFilter, listSearch]);
-
+  // Resolved installer string
   const resolvedInstallerName = useMemo(() => {
     if (installerPreset === 'NONE') return null;
-    if (installerPreset === 'Piazza') return 'Piazza';
-    if (installerPreset === 'Pauletto') return 'Pauletto';
-    return customInstaller.trim() || null;
+    if (installerPreset === 'CUSTOM') return customInstaller.trim() || null;
+    return installerPreset;
   }, [installerPreset, customInstaller]);
 
   const resetForm = () => {
@@ -208,15 +172,13 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
     setCommitmentNumber('');
     setCustomerName('');
     setCategory(sectionTab === 'VELUX' ? 'VELUX' : 'STANDARD');
-    setInstallerPreset(sectionTab === 'VELUX' ? 'Piazza' : 'NONE');
+    setInstallerPreset('NONE');
     setCustomInstaller('');
     setNotes('');
-    setItems([]);
     setFormError(null);
-    setCatalogSearch('');
   };
 
-  const handleEditCommitment = (c: CustomerCommitment) => {
+  const handleLoadForEdit = (c: CustomerCommitment) => {
     setEditingId(c.id);
     setCommitmentNumber(c.commitment_number);
     setCustomerName(c.customer_name);
@@ -224,10 +186,10 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
     if (!c.installer_name) {
       setInstallerPreset('NONE');
       setCustomInstaller('');
-    } else if (c.installer_name.toLowerCase() === 'piazza') {
+    } else if (c.installer_name === 'Piazza') {
       setInstallerPreset('Piazza');
       setCustomInstaller('');
-    } else if (c.installer_name.toLowerCase() === 'pauletto') {
+    } else if (c.installer_name === 'Pauletto') {
       setInstallerPreset('Pauletto');
       setCustomInstaller('');
     } else {
@@ -235,80 +197,8 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
       setCustomInstaller(c.installer_name);
     }
     setNotes(c.notes || '');
-    setItems(c.items.map((it) => ({ ...it })));
     setFormError(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const handleAddCatalogProduct = (product: Product) => {
-    // Auto-detect if it's a VELUX item and switch category to VELUX
-    if (
-      product.description.toLowerCase().includes('velux') ||
-      product.code.toLowerCase().includes('velux')
-    ) {
-      setCategory('VELUX');
-    }
-
-    setItems((prev) => {
-      const existingIdx = prev.findIndex((i) => i.product_code === product.code);
-      if (existingIdx >= 0) {
-        const next = [...prev];
-        next[existingIdx] = {
-          ...next[existingIdx],
-          quantity: next[existingIdx].quantity + 1,
-        };
-        return next;
-      }
-      return [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          product_id: product.id,
-          product_code: product.code,
-          product_description: product.description,
-          unit_of_measure: product.unit_of_measure || 'PZ',
-          quantity: 1,
-        },
-      ];
-    });
-  };
-
-  const handleAddManualItem = () => {
-    if (!manualDesc.trim()) return;
-    const code = manualCode.trim() || (category === 'VELUX' ? 'VELUX-ART' : 'ART-IMP');
-    const qty = Math.max(0.01, parseFloat(manualQty.replace(',', '.')) || 1);
-    setItems((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        product_id: null,
-        product_code: code.toUpperCase(),
-        product_description: manualDesc.trim(),
-        unit_of_measure: manualUm.trim().toUpperCase() || 'PZ',
-        quantity: qty,
-      },
-    ]);
-    setManualCode('');
-    setManualDesc('');
-    setManualQty('1');
-    setShowManualRow(false);
-  };
-
-  const handleUpdateItemQty = (id: string, val: string) => {
-    const parsed = parseFloat(val.replace(',', '.'));
-    setItems((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, quantity: isNaN(parsed) ? 0 : parsed } : it))
-    );
-  };
-
-  const handleUpdateItemUm = (id: string, um: string) => {
-    setItems((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, unit_of_measure: um.toUpperCase() } : it))
-    );
-  };
-
-  const handleRemoveItem = (id: string) => {
-    setItems((prev) => prev.filter((it) => it.id !== id));
   };
 
   const handleSaveCommitment = async (e: React.FormEvent) => {
@@ -316,16 +206,11 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
     setFormError(null);
 
     if (!customerName.trim()) {
-      setFormError('Inserisci il nome del Cliente.');
+      setFormError('Inserisci il nome del cliente.');
       return;
     }
     if (!commitmentNumber.trim()) {
-      setFormError('Inserisci il Numero Impegno Cliente (oppure clicca "Auto N°").');
-      return;
-    }
-    const validItems = items.filter((i) => i.quantity > 0 && i.product_description.trim());
-    if (validItems.length === 0) {
-      setFormError("Aggiungi almeno un articolo con quantità maggiore di zero all'impegno.");
+      setFormError("Inserisci il numero dell'impegno cliente.");
       return;
     }
 
@@ -334,57 +219,82 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
       let saved: CustomerCommitment;
       if (editingId) {
         saved = await updateCustomerCommitment(editingId, {
-          commitment_number: commitmentNumber,
-          customer_name: customerName,
+          commitment_number: commitmentNumber.trim(),
+          customer_name: customerName.trim(),
           category,
           installer_name: resolvedInstallerName,
-          notes,
-          items: validItems,
+          notes: notes.trim() || null,
+          items: [],
         });
       } else {
         saved = await createCustomerCommitment({
-          commitment_number: commitmentNumber,
-          customer_name: customerName,
+          commitment_number: commitmentNumber.trim(),
+          customer_name: customerName.trim(),
           category,
           installer_name: resolvedInstallerName,
-          notes,
-          items: validItems,
+          notes: notes.trim() || null,
+          items: [],
         });
       }
+
       await onRefreshCommitments();
       resetForm();
-      // Immediately open the QR label preview & print modal for the saved commitment
-      setPackagesCount(1);
       setPreviewCommitment(saved);
-    } catch (err: any) {
-      setFormError(err?.message || 'Errore durante il salvataggio.');
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : 'Errore durante il salvataggio.');
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleDelete = async (commitment: CustomerCommitment) => {
-    if (
-      !window.confirm(
-        `Eliminare l'impegno cliente N° ${commitment.commitment_number} (${commitment.customer_name})?`
-      )
-    ) {
+  const handleDeleteCommitment = async (c: CustomerCommitment) => {
+    if (!window.confirm(`Eliminare l'impegno N° ${c.commitment_number} (${c.customer_name})?`)) {
       return;
     }
-    await deleteCustomerCommitment(commitment.id);
+    await deleteCustomerCommitment(c.id);
     await onRefreshCommitments();
   };
 
-  const handleDownloadSinglePng = () => {
-    if (!previewDataUrl || !previewCommitment) return;
-    const safeCust = previewCommitment.customer_name.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const safeNum = previewCommitment.commitment_number.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const a = document.createElement('a');
-    a.href = previewDataUrl;
-    a.download = `Etichetta_Impegno_${safeNum}_${safeCust}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+  // Filtered commitments list
+  const visibleCommitments = useMemo(() => {
+    const q = listSearch.trim().toLowerCase();
+    return commitments.filter((c) => {
+      if (sectionTab === 'VELUX' && c.category !== 'VELUX') return false;
+      if (statusFilter !== 'ALL' && c.status !== statusFilter) return false;
+      if (installerFilter === 'PIAZZA' && c.installer_name?.toLowerCase() !== 'piazza') return false;
+      if (installerFilter === 'PAULETTO' && c.installer_name?.toLowerCase() !== 'pauletto') return false;
+      if (
+        installerFilter === 'OTHER' &&
+        (!c.installer_name ||
+          c.installer_name.toLowerCase() === 'piazza' ||
+          c.installer_name.toLowerCase() === 'pauletto')
+      ) {
+        return false;
+      }
+
+      if (!q) return true;
+      return (
+        c.customer_name.toLowerCase().includes(q) ||
+        c.commitment_number.toLowerCase().includes(q) ||
+        (c.installer_name && c.installer_name.toLowerCase().includes(q)) ||
+        (c.notes && c.notes.toLowerCase().includes(q))
+      );
+    });
+  }, [commitments, sectionTab, statusFilter, installerFilter, listSearch]);
+
+  const handleDownloadSinglePng = async () => {
+    if (!previewCommitment) return;
+    const canvas =
+      printMode === 'DYMO'
+        ? await renderCommitmentDymoCanvas(previewCommitment, dymoFormat)
+        : await renderCommitmentLabelCanvas(previewCommitment);
+    const url = canvas.toDataURL('image/png');
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `QR_Impegno_${previewCommitment.commitment_number}_${previewCommitment.customer_name
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 24)}.png`;
+    link.click();
   };
 
   const handleDownloadPdf = async () => {
@@ -402,6 +312,28 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
     setIsExporting(true);
     try {
       await printCommitmentSheets(previewCommitment, printLayout, packagesCount);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handlePrintDymoDirect = async () => {
+    if (!previewCommitment) return;
+    setIsExporting(true);
+    setDymoStatusMsg(null);
+    try {
+      const canvas = await renderCommitmentDymoCanvas(previewCommitment, dymoFormat);
+      const printer = dymoPrinters.find((p) => p.name === selectedDymoPrinter) || dymoPrinters[0];
+      if (printer) {
+        await printViaDymoWebService(printer, canvas, dymoFormat, packagesCount);
+        setDymoStatusMsg(`Inviato con successo a ${printer.name} (${packagesCount} etichette)!`);
+      } else {
+        printDymoViaBrowserDriver(canvas, dymoFormat, packagesCount);
+      }
+    } catch {
+      // Fallback to browser driver print dialog with exact DYMO page size
+      const canvas = await renderCommitmentDymoCanvas(previewCommitment, dymoFormat);
+      printDymoViaBrowserDriver(canvas, dymoFormat, packagesCount);
     } finally {
       setIsExporting(false);
     }
@@ -435,7 +367,7 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
               <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">
                 {sectionTab === 'VELUX'
                   ? 'Impegni Clienti · Reparto VELUX'
-                  : 'Gestione Impegni Clienti & Etichette QR Merce'}
+                  : 'Impegni Clienti & Etichette QR'}
               </h1>
               {readOnly && (
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-200">
@@ -445,8 +377,8 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
             </div>
             <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
               {readOnly
-                ? "Consulta gli impegni preparati dall'ufficio o scansiona il QR sulla merce da 'Nuovo Carico' per inserire subito tutti gli articoli nell'ordine."
-                : 'Inserisci Cliente, N° Impegno, eventuale Installatore e Merce: genera il QR Code pulito con Nome Cliente e N° Impegno da applicare ai colli.'}
+                ? "Consulta gli impegni preparati dall'ufficio. Scansionando il QR sulla merce da 'Nuovo Carico', cliente e impegno vengono impostati automaticamente."
+                : 'Inserisci Cliente, N° Impegno, Installatore ed eventuali Note: genera subito il QR Code da stampare su DYMO o A4.'}
             </p>
           </div>
         </div>
@@ -497,139 +429,94 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
         </div>
       </div>
 
-      {/* Main Content Grid: Left Creation Form (only for Ufficio), Right Commitments List */}
-      <div className={`grid grid-cols-1 ${readOnly ? '' : 'xl:grid-cols-12'} gap-6 items-start`}>
-        {/* OFFICE CREATION / EDIT FORM */}
+      {/* Main Layout: Left Create Form (Office only) + Right Commitments List */}
+      <div className={`grid grid-cols-1 ${readOnly ? '' : 'lg:grid-cols-12'} gap-6 items-start`}>
+        {/* OFFICE FORM: CREATE / EDIT COMMITMENT */}
         {!readOnly && (
-          <div className="xl:col-span-5 bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-            {/* Form Header */}
+          <form
+            onSubmit={handleSaveCommitment}
+            className="lg:col-span-5 bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden"
+          >
             <div
-              className={`px-5 py-4 border-b flex items-center justify-between ${
+              className={`px-5 py-4 flex items-center justify-between border-b ${
                 category === 'VELUX'
-                  ? 'bg-gradient-to-r from-[#e30613] to-red-700 text-white border-red-700'
+                  ? 'bg-[#e30613] text-white border-red-700'
                   : 'bg-slate-900 text-white border-slate-800'
               }`}
             >
               <div className="flex items-center gap-2.5">
                 {category === 'VELUX' ? (
-                  <span className="px-2 py-0.5 bg-white text-[#e30613] font-black text-xs tracking-wider rounded">
-                    VELUX
-                  </span>
+                  <img
+                    src="/velux-logo.png"
+                    alt="VELUX"
+                    className="h-6 w-auto bg-white rounded px-1 py-0.5 object-contain"
+                  />
                 ) : (
-                  <QrCode className="w-5 h-5 text-red-400" />
+                  <Plus className="w-5 h-5 text-red-400" />
                 )}
-                <div>
-                  <h2 className="text-sm sm:text-base font-extrabold tracking-tight">
-                    {editingId
-                      ? `Modifica Impegno N° ${commitmentNumber}`
-                      : category === 'VELUX'
-                      ? 'Nuovo Impegno Cliente VELUX'
-                      : 'Nuovo Impegno Cliente'}
-                  </h2>
-                  <p className="text-[11px] opacity-85">
-                    {category === 'VELUX'
-                      ? 'Logo VELUX automatico nel QR + Installatore (Piazza / Pauletto / Personalizzato)'
-                      : 'Genera etichetta QR con Nome Cliente, N° Impegno e Merce'}
-                  </p>
-                </div>
+                <h2 className="text-sm sm:text-base font-extrabold">
+                  {editingId
+                    ? 'Modifica Impegno Cliente'
+                    : category === 'VELUX'
+                    ? 'Nuovo Impegno VELUX'
+                    : 'Nuovo Impegno Cliente'}
+                </h2>
               </div>
               {editingId && (
                 <button
                   type="button"
                   onClick={resetForm}
-                  className="text-xs font-bold bg-white/15 hover:bg-white/25 px-2.5 py-1 rounded-lg flex items-center gap-1"
+                  className="text-xs font-bold px-2.5 py-1 rounded-lg bg-white/15 hover:bg-white/25 text-white"
                 >
-                  <X className="w-3.5 h-3.5" />
                   Annulla
                 </button>
               )}
             </div>
 
-            <form onSubmit={handleSaveCommitment} className="p-5 space-y-4">
-              {formError && (
-                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-                  <span>{formError}</span>
-                </div>
-              )}
-
-              {/* Tipologia Etichetta Switch: Standard vs VELUX */}
+            <div className="p-5 space-y-4">
+              {/* Category Toggle: Standard vs VELUX */}
               <div>
-                <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">
-                  Tipologia Impegno & Logo nel QR Code
+                <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">
+                  Tipologia Impegno
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => setCategory('STANDARD')}
-                    className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                    className={`py-2.5 px-3 rounded-xl text-xs font-extrabold border transition-all flex items-center justify-center gap-2 ${
                       category === 'STANDARD'
-                        ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                        : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                        : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
                     }`}
                   >
-                    <Package className="w-4 h-4" />
-                    <span>Standard (Logo Saggin)</span>
+                    <QrCode className="w-4 h-4" />
+                    <span>Impegno Normale</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setCategory('VELUX');
-                      if (installerPreset === 'NONE') setInstallerPreset('Piazza');
-                    }}
-                    className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                    onClick={() => setCategory('VELUX')}
+                    className={`py-2.5 px-3 rounded-xl text-xs font-extrabold border transition-all flex items-center justify-center gap-2 ${
                       category === 'VELUX'
                         ? 'bg-[#e30613] text-white border-[#e30613] shadow-sm shadow-red-600/20'
                         : 'bg-red-50/60 text-[#e30613] border-red-200 hover:bg-red-50'
                     }`}
                   >
-                    <span
-                      className={`px-1.5 py-0.2 rounded text-[10px] font-black ${
-                        category === 'VELUX'
-                          ? 'bg-white text-[#e30613]'
-                          : 'bg-[#e30613] text-white'
-                      }`}
-                    >
-                      VELUX
-                    </span>
-                    <span>Impegno VELUX (Logo QR)</span>
+                    <img
+                      src="/velux-logo.png"
+                      alt="VELUX"
+                      className="h-4 w-auto bg-white rounded-xs px-0.5 object-contain"
+                    />
+                    <span>Reparto VELUX</span>
                   </button>
                 </div>
               </div>
 
-              {/* Cliente & Numero Impegno */}
+              {/* Numero Impegno + Nome Cliente */}
               <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                <div className="sm:col-span-7">
-                  <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-600 mb-1">
-                    Cliente / Riferimento *
-                  </label>
-                  <div className="relative">
-                    <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                      placeholder="Es. Rossi Costruzioni / Mario Bianchi"
-                      className="w-full pl-9 pr-3 py-2.5 text-sm font-semibold bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-slate-900 focus:outline-none"
-                    />
-                  </div>
-                </div>
-
                 <div className="sm:col-span-5">
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-600">
-                      N° Impegno *
-                    </label>
-                    <button
-                      type="button"
-                      onClick={generateNextCommitmentNumber}
-                      className="text-[11px] font-bold text-red-600 hover:text-red-700 flex items-center gap-0.5"
-                      title="Genera numero impegno progressivo"
-                    >
-                      <Sparkles className="w-3 h-3" />
-                      Auto N°
-                    </button>
-                  </div>
+                  <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-1">
+                    N° Impegno *
+                  </label>
                   <div className="relative">
                     <Hash className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                     <input
@@ -637,598 +524,290 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
                       value={commitmentNumber}
                       onChange={(e) => setCommitmentNumber(e.target.value)}
                       placeholder="Es. 2026/145"
-                      className="w-full pl-9 pr-3 py-2.5 text-sm font-mono font-bold bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-slate-900 focus:outline-none"
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="sm:col-span-7">
+                  <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-1">
+                    Nome Cliente *
+                  </label>
+                  <div className="relative">
+                    <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      placeholder="Es. Rossi Mario Costruzioni"
+                      className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-300 text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500"
                     />
                   </div>
                 </div>
               </div>
 
-              {/* Installatore Section (Piazza / Pauletto / Personalizzato) */}
+              {/* Installer Selection — clear and prominent for BOTH Normal and VELUX */}
               <div
-                className={`p-3.5 rounded-xl border ${
+                className={`p-3.5 rounded-xl border space-y-2.5 ${
                   category === 'VELUX'
-                    ? 'bg-red-50/50 border-red-200/80'
-                    : 'bg-slate-50/80 border-slate-200/80'
+                    ? 'bg-red-50/70 border-red-200/80'
+                    : 'bg-slate-50 border-slate-200'
                 }`}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-[11px] font-extrabold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                    <Wrench className="w-3.5 h-3.5 text-[#e30613]" />
-                    <span>Installatore Associato (Stampato su Etichetta QR)</span>
-                  </label>
-                  {resolvedInstallerName && (
-                    <span className="text-[11px] font-extrabold text-[#e30613] bg-white px-2 py-0.5 rounded-md border border-red-200">
-                      Inst: {resolvedInstallerName}
+                <div className="flex items-center justify-between">
+                  <label
+                    className={`flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wider ${
+                      category === 'VELUX' ? 'text-[#e30613]' : 'text-slate-700'
+                    }`}
+                  >
+                    <Wrench className="w-3.5 h-3.5" />
+                    <span>
+                      {category === 'VELUX'
+                        ? 'Installatore VELUX'
+                        : "Chi è l'Installatore?"}
                     </span>
-                  )}
+                  </label>
+                  <span className="text-[11px] font-semibold text-slate-500">
+                    {resolvedInstallerName ? `Selezionato: ${resolvedInstallerName}` : 'Opzionale'}
+                  </span>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setInstallerPreset('NONE')}
-                    className={`py-2 px-2.5 rounded-lg text-xs font-bold border transition-all ${
-                      installerPreset === 'NONE'
-                        ? 'bg-slate-800 text-white border-slate-800'
-                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    Nessuno
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInstallerPreset('Piazza')}
-                    className={`py-2 px-2.5 rounded-lg text-xs font-extrabold border transition-all flex items-center justify-center gap-1 ${
-                      installerPreset === 'Piazza'
-                        ? 'bg-[#e30613] text-white border-[#e30613] shadow-sm'
-                        : 'bg-white text-slate-800 border-slate-200 hover:border-red-300'
-                    }`}
-                  >
-                    {installerPreset === 'Piazza' && <Check className="w-3.5 h-3.5" />}
-                    <span>Piazza</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInstallerPreset('Pauletto')}
-                    className={`py-2 px-2.5 rounded-lg text-xs font-extrabold border transition-all flex items-center justify-center gap-1 ${
-                      installerPreset === 'Pauletto'
-                        ? 'bg-[#e30613] text-white border-[#e30613] shadow-sm'
-                        : 'bg-white text-slate-800 border-slate-200 hover:border-red-300'
-                    }`}
-                  >
-                    {installerPreset === 'Pauletto' && <Check className="w-3.5 h-3.5" />}
-                    <span>Pauletto</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInstallerPreset('CUSTOM')}
-                    className={`py-2 px-2.5 rounded-lg text-xs font-bold border transition-all ${
-                      installerPreset === 'CUSTOM'
-                        ? 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    Personalizzato
-                  </button>
+                  {(
+                    [
+                      { id: 'NONE', label: 'Nessuno' },
+                      { id: 'Piazza', label: 'Piazza' },
+                      { id: 'Pauletto', label: 'Pauletto' },
+                      { id: 'CUSTOM', label: 'Personalizzato' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setInstallerPreset(opt.id)}
+                      className={`py-2 px-2.5 rounded-lg text-xs font-extrabold border transition-all ${
+                        installerPreset === opt.id
+                          ? category === 'VELUX'
+                            ? 'bg-[#e30613] text-white border-[#e30613] shadow-xs'
+                            : 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
                 </div>
 
                 {installerPreset === 'CUSTOM' && (
-                  <div className="mt-2.5">
-                    <input
-                      type="text"
-                      value={customInstaller}
-                      onChange={(e) => setCustomInstaller(e.target.value)}
-                      placeholder="Scrivi nome installatore personalizzato..."
-                      className="w-full px-3 py-2 text-xs font-bold bg-white border border-slate-300 rounded-lg focus:border-slate-900 focus:outline-none"
-                      autoFocus
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* Catalog Search & Add Products */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <label className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600">
-                    Aggiungi Merce all&apos;Impegno
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setOnlyVeluxCatalog((v) => !v)}
-                      className={`px-2 py-0.5 rounded text-[11px] font-bold border transition-all ${
-                        onlyVeluxCatalog
-                          ? 'bg-[#e30613] text-white border-[#e30613]'
-                          : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
-                      }`}
-                    >
-                      Solo Articoli VELUX
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowManualRow((v) => !v)}
-                      className="text-[11px] font-bold text-slate-700 hover:text-slate-900 underline"
-                    >
-                      + Articolo Manuale
-                    </button>
-                  </div>
-                </div>
-
-                {/* Search Input */}
-                <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
-                    value={catalogSearch}
-                    onChange={(e) => setCatalogSearch(e.target.value)}
-                    placeholder={
-                      onlyVeluxCatalog
-                        ? 'Cerca finestre, raccordi, tende o codici VELUX (es. GGL, EDW, MK04)...'
-                        : 'Cerca articolo in listino per codice o descrizione...'
-                    }
-                    className="w-full pl-9 pr-8 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-slate-900 focus:outline-none"
+                    value={customInstaller}
+                    onChange={(e) => setCustomInstaller(e.target.value)}
+                    placeholder="Scrivi nome installatore personalizzato..."
+                    autoFocus
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500"
                   />
-                  {catalogSearch && (
-                    <button
-                      type="button"
-                      onClick={() => setCatalogSearch('')}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-
-                {/* Matching Catalog Dropdown List */}
-                {(catalogSearch.trim().length > 0 || onlyVeluxCatalog) &&
-                  matchingProducts.length > 0 && (
-                    <div className="max-h-48 overflow-y-auto rounded-xl border border-slate-200 bg-white divide-y divide-slate-100 shadow-sm">
-                      {matchingProducts.map((p) => {
-                        const isVeluxItem =
-                          p.description.toLowerCase().includes('velux') ||
-                          p.code.toLowerCase().includes('velux');
-                        return (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() => handleAddCatalogProduct(p)}
-                            className="w-full px-3 py-2 text-left hover:bg-slate-50 flex items-center justify-between gap-2 transition-colors group"
-                          >
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-mono text-xs font-extrabold text-slate-900">
-                                  {p.code}
-                                </span>
-                                {isVeluxItem && (
-                                  <span className="px-1 py-0.2 bg-[#e30613] text-white text-[9px] font-black rounded">
-                                    VELUX
-                                  </span>
-                                )}
-                                <span className="text-[10px] font-bold text-slate-400 uppercase">
-                                  [{p.unit_of_measure}]
-                                </span>
-                              </div>
-                              <p className="text-xs text-slate-600 truncate">
-                                {p.description}
-                              </p>
-                            </div>
-                            <span className="shrink-0 px-2 py-1 rounded-lg bg-slate-100 group-hover:bg-slate-900 group-hover:text-white text-slate-700 text-xs font-bold flex items-center gap-1">
-                              <Plus className="w-3.5 h-3.5" />
-                              Aggiungi
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                {/* Manual / Custom Product Row Box */}
-                {showManualRow && (
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-extrabold uppercase text-slate-700">
-                        Inserimento Articolo Manuale / Fuori Listino
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowManualRow(false)}
-                        className="text-slate-400 hover:text-slate-600"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-12 gap-2">
-                      <input
-                        type="text"
-                        value={manualCode}
-                        onChange={(e) => setManualCode(e.target.value)}
-                        placeholder="Codice (es. GGL MK04)"
-                        className="col-span-4 px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-200 rounded-lg"
-                      />
-                      <input
-                        type="text"
-                        value={manualDesc}
-                        onChange={(e) => setManualDesc(e.target.value)}
-                        placeholder="Descrizione articolo *"
-                        className="col-span-8 px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                      />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="text"
-                        value={manualQty}
-                        onChange={(e) => setManualQty(e.target.value)}
-                        placeholder="Q.tà"
-                        className="w-20 px-2.5 py-1.5 text-xs font-bold bg-white border border-slate-200 rounded-lg"
-                      />
-                      <input
-                        type="text"
-                        value={manualUm}
-                        onChange={(e) => setManualUm(e.target.value)}
-                        placeholder="U.M."
-                        className="w-20 px-2.5 py-1.5 text-xs font-mono uppercase bg-white border border-slate-200 rounded-lg"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleAddManualItem}
-                        className="ml-auto px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold hover:bg-slate-800"
-                      >
-                        Inserisci Riga
-                      </button>
-                    </div>
-                  </div>
                 )}
               </div>
 
-              {/* Added Items List */}
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600">
-                    Merce nell&apos;Impegno ({items.length}{' '}
-                    {items.length === 1 ? 'articolo' : 'articoli'})
-                  </span>
-                  {items.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setItems([])}
-                      className="text-[11px] font-semibold text-red-600 hover:underline"
-                    >
-                      Svuota lista
-                    </button>
-                  )}
-                </div>
-
-                {items.length === 0 ? (
-                  <div className="p-5 rounded-xl border border-dashed border-slate-200 text-center text-xs text-slate-400">
-                    Cerca e clicca gli articoli dal listino qui sopra per inserirli nell&apos;impegno.
-                  </div>
-                ) : (
-                  <div className="max-h-60 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-xl bg-slate-50/50">
-                    {items.map((it) => (
-                      <div
-                        key={it.id}
-                        className="p-2.5 flex items-center justify-between gap-2 bg-white hover:bg-slate-50/80"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <span className="font-mono text-[11px] font-extrabold text-slate-900 block">
-                            {it.product_code}
-                          </span>
-                          <span className="text-xs text-slate-700 font-medium line-clamp-1">
-                            {it.product_description}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <input
-                            type="number"
-                            step="any"
-                            min="0.01"
-                            value={it.quantity || ''}
-                            onChange={(e) => handleUpdateItemQty(it.id, e.target.value)}
-                            className="w-16 px-2 py-1 text-xs font-extrabold text-center bg-slate-50 border border-slate-200 rounded-lg"
-                          />
-                          <input
-                            type="text"
-                            value={it.unit_of_measure}
-                            onChange={(e) => handleUpdateItemUm(it.id, e.target.value)}
-                            className="w-12 px-1.5 py-1 text-[11px] font-mono font-bold text-center uppercase bg-slate-50 border border-slate-200 rounded-lg"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveItem(it.id)}
-                            className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Optional Notes */}
+              {/* Notes / Comments */}
               <div>
-                <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-1">
-                  Note Consegna / Ubicazione Piazzale (Opzionale)
+                <label className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-1">
+                  <MessageSquareText className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Note / Commenti (Opzionale)</span>
                 </label>
-                <input
-                  type="text"
+                <textarea
+                  rows={3}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Es. Scaffale B2 - Ritira installatore venerdi mattina"
-                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-slate-900 focus:outline-none"
+                  placeholder="Es. Ritiro previsto venerdì mattina · Mancano 2 colli..."
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-500/30 focus:border-red-500 resize-none"
                 />
               </div>
+
+              {formError && (
+                <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-bold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{formError}</span>
+                </div>
+              )}
 
               <button
                 type="submit"
                 disabled={isSaving}
-                className={`w-full py-3 px-4 rounded-xl font-extrabold text-sm text-white shadow-md flex items-center justify-center gap-2 transition-all ${
+                className={`w-full py-3.5 px-4 rounded-xl text-sm font-extrabold text-white shadow-md transition-all flex items-center justify-center gap-2 ${
                   category === 'VELUX'
                     ? 'bg-[#e30613] hover:bg-red-700 shadow-red-600/20'
-                    : 'bg-slate-900 hover:bg-slate-800 shadow-slate-900/15'
-                }`}
+                    : 'bg-red-600 hover:bg-red-700 shadow-red-600/20'
+                } disabled:opacity-60`}
               >
-                <QrCode className="w-4 h-4" />
+                <QrCode className="w-5 h-5" />
                 <span>
                   {isSaving
                     ? 'Salvataggio in corso...'
                     : editingId
-                    ? 'Salva Modifiche & Rigenera QR'
-                    : category === 'VELUX'
-                    ? 'Crea Impegno VELUX & Genera QR Code'
-                    : 'Crea Impegno Cliente & Genera QR Code'}
+                    ? 'Salva Modifiche e Genera QR'
+                    : 'Crea Impegno e Genera QR Stampabile'}
                 </span>
               </button>
-            </form>
-          </div>
+            </div>
+          </form>
         )}
 
-        {/* RIGHT COLUMN: COMMITMENTS LIST (Both Office & Warehouse) */}
-        <div className={`${readOnly ? 'col-span-1' : 'xl:col-span-7'} space-y-4`}>
-          {/* Search & Filters Bar */}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-4 space-y-3">
-            <div className="flex flex-col sm:flex-row gap-2.5">
-              <div className="relative flex-1">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={listSearch}
-                  onChange={(e) => setListSearch(e.target.value)}
-                  placeholder="Cerca per Cliente, N° Impegno, Installatore (Piazza/Pauletto) o Articolo..."
-                  className="w-full pl-10 pr-4 py-2.5 text-xs sm:text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:border-slate-900 focus:outline-none"
-                />
-              </div>
-
-              {/* Status Filter */}
-              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200/70 shrink-0">
-                {(
-                  [
-                    { id: 'ALL', label: 'Tutti' },
-                    { id: 'ATTIVO', label: 'In Giacenza' },
-                    { id: 'CARICATO', label: 'Già Caricati' },
-                  ] as const
-                ).map((st) => (
-                  <button
-                    key={st.id}
-                    type="button"
-                    onClick={() => setStatusFilter(st.id)}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                      statusFilter === st.id
-                        ? 'bg-white text-slate-900 shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    {st.label}
-                  </button>
-                ))}
-              </div>
+        {/* COMMITMENTS LIST */}
+        <div className={`${readOnly ? 'w-full' : 'lg:col-span-7'} space-y-4`}>
+          {/* Search & Filter Bar */}
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-3.5 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={listSearch}
+                onChange={(e) => setListSearch(e.target.value)}
+                placeholder="Cerca per cliente, numero impegno, installatore o note..."
+                className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:bg-white focus:border-slate-400"
+              />
             </div>
 
-            {/* Quick Installer Filter Pills */}
-            <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-slate-100">
-              <span className="text-[11px] font-bold text-slate-400 uppercase mr-1">
-                Filtra Installatore:
-              </span>
-              {(['ALL', 'Piazza', 'Pauletto'] as const).map((inst) => (
-                <button
-                  key={inst}
-                  type="button"
-                  onClick={() => setInstallerFilter(inst)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all ${
-                    installerFilter === inst
-                      ? 'bg-slate-900 text-white border-slate-900'
-                      : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
-                  }`}
-                >
-                  {inst === 'ALL' ? 'Tutti' : `Installatore: ${inst}`}
-                </button>
-              ))}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as 'ALL' | 'ATTIVO' | 'CARICATO')}
+                className="px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700 focus:outline-none"
+              >
+                <option value="ALL">Tutti gli stati</option>
+                <option value="ATTIVO">Attivi (Da Caricare)</option>
+                <option value="CARICATO">Già Caricati</option>
+              </select>
+
+              <select
+                value={installerFilter}
+                onChange={(e) => setInstallerFilter(e.target.value)}
+                className="px-2.5 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700 focus:outline-none"
+              >
+                <option value="ALL">Tutti installatori</option>
+                <option value="PIAZZA">Piazza</option>
+                <option value="PAULETTO">Pauletto</option>
+                <option value="OTHER">Altri Personalizzati</option>
+              </select>
             </div>
           </div>
 
-          {/* Commitments Cards */}
-          {filteredCommitments.length === 0 ? (
-            <div className="bg-white rounded-2xl border border-slate-200/90 p-10 text-center space-y-2">
-              <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
-                <QrCode className="w-6 h-6" />
-              </div>
-              <h3 className="text-base font-bold text-slate-800">
+          {/* Cards */}
+          {visibleCommitments.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-dashed border-slate-300 p-10 text-center">
+              <QrCode className="w-10 h-10 text-slate-300 mx-auto mb-2.5" />
+              <h3 className="text-sm font-extrabold text-slate-700">
                 Nessun impegno cliente trovato
               </h3>
-              <p className="text-xs text-slate-500 max-w-md mx-auto">
+              <p className="text-xs text-slate-500 mt-1">
                 {readOnly
-                  ? "Non ci sono impegni clienti corrispondenti ai filtri selezionati."
-                  : "Compila il modulo a sinistra per creare un nuovo impegno cliente e stampare l'etichetta QR Code per la merce."}
+                  ? "Quando l'ufficio creerà un nuovo impegno cliente o VELUX, apparirà qui in tempo reale."
+                  : 'Compila il modulo a sinistra per registrare un nuovo impegno e stampare il QR.'}
               </p>
             </div>
           ) : (
             <div className="space-y-3">
-              {filteredCommitments.map((commitment) => {
-                const isVelux = commitment.category === 'VELUX';
-                const isLoaded = commitment.status === 'CARICATO';
-
+              {visibleCommitments.map((c) => {
+                const isVelux = c.category === 'VELUX';
                 return (
                   <div
-                    key={commitment.id}
-                    className={`bg-white rounded-2xl border transition-all shadow-sm overflow-hidden ${
-                      isVelux
-                        ? 'border-red-200/90 hover:border-red-300'
-                        : 'border-slate-200/90 hover:border-slate-300'
+                    key={c.id}
+                    className={`bg-white rounded-2xl border shadow-xs overflow-hidden transition-all ${
+                      isVelux ? 'border-red-200/90' : 'border-slate-200/90'
                     }`}
                   >
-                    {/* Top Bar of Card */}
-                    <div
-                      className={`px-4 py-3 border-b flex flex-wrap items-center justify-between gap-2 ${
-                        isVelux ? 'bg-red-50/50 border-red-100' : 'bg-slate-50/70 border-slate-100'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {isVelux && (
-                          <span className="px-2 py-0.5 bg-[#e30613] text-white font-black text-[11px] tracking-wider rounded shadow-xs">
-                            VELUX
+                    <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="space-y-1.5 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {isVelux && (
+                            <img
+                              src="/velux-logo.png"
+                              alt="VELUX"
+                              className="h-5 w-auto rounded-xs object-contain"
+                            />
+                          )}
+                          <span className="px-2.5 py-0.5 rounded-md bg-slate-900 text-white text-xs font-mono font-extrabold">
+                            IMPEGNO N° {c.commitment_number}
                           </span>
-                        )}
-                        <span className="font-mono text-xs sm:text-sm font-black px-2.5 py-0.5 rounded-lg bg-slate-900 text-white">
-                          IMPEGNO N° {commitment.commitment_number}
-                        </span>
-                        <span
-                          className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${
-                            isLoaded
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                              : 'bg-amber-50 text-amber-800 border-amber-200'
-                          }`}
-                        >
-                          {isLoaded ? '✓ Già Caricato in Ordine' : '● Merce Impegnata in Magazzino'}
-                        </span>
-                      </div>
-
-                      <span className="text-[11px] text-slate-400 font-medium">
-                        {new Date(commitment.created_at).toLocaleDateString('it-IT', {
-                          day: '2-digit',
-                          month: '2-digit',
-                          year: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
-                    </div>
-
-                    {/* Body of Card */}
-                    <div className="p-4 space-y-3">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                        <div>
-                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                            Cliente Assegnatario
-                          </div>
-                          <div className="text-base sm:text-lg font-extrabold text-slate-900">
-                            {commitment.customer_name}
-                          </div>
+                          <span
+                            className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold ${
+                              c.status === 'CARICATO'
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                : 'bg-amber-100 text-amber-800 border border-amber-200'
+                            }`}
+                          >
+                            {c.status === 'CARICATO' ? 'CARICATO' : 'ATTIVO'}
+                          </span>
+                          {c.installer_name && (
+                            <span className="px-2 py-0.5 rounded-md bg-red-50 text-[#e30613] border border-red-200 text-[11px] font-extrabold flex items-center gap-1">
+                              <Wrench className="w-3 h-3" />
+                              Inst: {c.installer_name}
+                            </span>
+                          )}
                         </div>
 
-                        {commitment.installer_name && (
-                          <div className="px-3 py-1.5 rounded-xl bg-red-50 border border-red-200/80 self-start sm:self-auto">
-                            <span className="text-[10px] font-extrabold uppercase tracking-wider text-red-700 block">
-                              Installatore
-                            </span>
-                            <span className="text-xs sm:text-sm font-black text-[#e30613] flex items-center gap-1">
-                              <Wrench className="w-3.5 h-3.5" />
-                              {commitment.installer_name}
-                            </span>
+                        <h3 className="text-base sm:text-lg font-extrabold text-slate-900 truncate">
+                          {c.customer_name}
+                        </h3>
+
+                        {c.notes && (
+                          <div className="inline-flex items-start gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-200/80 text-xs font-semibold text-amber-900">
+                            <MessageSquareText className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-600" />
+                            <span>{c.notes}</span>
                           </div>
                         )}
                       </div>
 
-                      {commitment.notes && (
-                        <div className="text-xs text-slate-600 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200/60">
-                          <span className="font-bold text-slate-700">Note: </span>
-                          {commitment.notes}
-                        </div>
-                      )}
+                      {/* Card Action Buttons */}
+                      <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                        {readOnly && onLoadCommitmentIntoOrder && (
+                          <button
+                            type="button"
+                            onClick={() => onLoadCommitmentIntoOrder(c)}
+                            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-xs"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>Carica nell&apos;Ordine</span>
+                          </button>
+                        )}
 
-                      {/* Items Table */}
-                      <div className="rounded-xl border border-slate-200/80 overflow-hidden">
-                        <table className="w-full text-left border-collapse">
-                          <thead>
-                            <tr className="bg-slate-50 text-[10px] font-extrabold uppercase tracking-wider text-slate-500 border-b border-slate-200/80">
-                              <th className="py-1.5 px-3">Codice</th>
-                              <th className="py-1.5 px-3">Descrizione Merce</th>
-                              <th className="py-1.5 px-3 text-right">Q.tà</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 text-xs">
-                            {commitment.items.map((item) => (
-                              <tr key={item.id} className="hover:bg-slate-50/60">
-                                <td className="py-1.5 px-3 font-mono font-bold text-slate-900 whitespace-nowrap">
-                                  {item.product_code}
-                                </td>
-                                <td className="py-1.5 px-3 text-slate-700 font-medium">
-                                  {item.product_description}
-                                </td>
-                                <td className="py-1.5 px-3 text-right font-mono font-extrabold text-slate-900 whitespace-nowrap">
-                                  {item.quantity} {item.unit_of_measure}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-
-                      {/* Card Footer Actions */}
-                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                         <button
                           type="button"
                           onClick={() => {
                             setPackagesCount(1);
-                            setPreviewCommitment(commitment);
+                            setPreviewCommitment(c);
                           }}
-                          className={`px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 shadow-xs transition-all ${
+                          className={`px-3.5 py-2 rounded-xl text-xs font-extrabold flex items-center gap-1.5 shadow-xs ${
                             isVelux
                               ? 'bg-[#e30613] hover:bg-red-700 text-white'
                               : 'bg-slate-900 hover:bg-slate-800 text-white'
                           }`}
                         >
                           <QrCode className="w-4 h-4" />
-                          <span>
-                            {readOnly
-                              ? 'Mostra Etichetta QR'
-                              : 'Stampa / Scarica QR da Appiccicare'}
-                          </span>
+                          <span>QR &amp; Stampa</span>
                         </button>
 
-                        <div className="flex items-center gap-2">
-                          {onLoadCommitmentIntoOrder && (
+                        {!readOnly && (
+                          <>
                             <button
                               type="button"
-                              onClick={() => onLoadCommitmentIntoOrder(commitment)}
-                              className="px-3.5 py-2 rounded-xl text-xs font-extrabold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 shadow-xs transition-all"
+                              onClick={() => handleLoadForEdit(c)}
+                              title="Modifica Impegno"
+                              className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700"
                             >
-                              <ShoppingBag className="w-4 h-4" />
-                              <span>Carica nell&apos;Ordine</span>
+                              <Edit3 className="w-4 h-4" />
                             </button>
-                          )}
-
-                          {!readOnly && (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => handleEditCommitment(commitment)}
-                                className="p-2 rounded-xl border border-slate-200 text-slate-600 hover:text-slate-900 hover:bg-slate-50"
-                                title="Modifica Impegno"
-                              >
-                                <Edit3 className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDelete(commitment)}
-                                className="p-2 rounded-xl border border-slate-200 text-slate-400 hover:text-red-600 hover:bg-red-50"
-                                title="Elimina Impegno"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </>
-                          )}
-                        </div>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteCommitment(c)}
+                              title="Elimina Impegno"
+                              className="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1239,10 +818,10 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
         </div>
       </div>
 
-      {/* MODAL ANTEPRIMA E STAMPA ETICHETTA QR IMPEGNO CLIENTE */}
+      {/* QR LABEL PREVIEW & PRINT MODAL (DYMO + A4) */}
       {previewCommitment && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-4xl w-full border border-slate-200 shadow-2xl overflow-hidden my-auto">
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full overflow-hidden border border-slate-200 my-auto">
             {/* Modal Header */}
             <div
               className={`px-6 py-4 flex items-center justify-between ${
@@ -1259,8 +838,7 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
                     {previewCommitment.customer_name}
                   </h3>
                   <p className="text-xs opacity-90">
-                    Pronta da stampare e applicare sui colli. Scansionando il QR in magazzino, tutti
-                    gli articoli vengono inseriti nell&apos;ordine.
+                    Stampa direttamente su rotolo termico DYMO oppure su foglio A4.
                   </p>
                 </div>
               </div>
@@ -1276,7 +854,7 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
             {/* Modal Content */}
             <div className="p-5 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
               {/* Rendered High-Res Label Image Preview */}
-              <div className="lg:col-span-7 bg-slate-100 rounded-2xl p-4 border border-slate-200 flex flex-col items-center justify-center">
+              <div className="lg:col-span-6 bg-slate-100 rounded-2xl p-4 border border-slate-200 flex flex-col items-center justify-center min-h-[300px]">
                 {isRenderingPreview ? (
                   <div className="py-20 text-xs font-bold text-slate-500">
                     Generazione etichetta ad alta definizione...
@@ -1286,84 +864,184 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
                     <img
                       src={previewDataUrl}
                       alt="Etichetta QR Impegno Cliente"
-                      className="w-full max-w-md rounded-xl shadow-md border border-slate-300 bg-white"
+                      className="max-w-full max-h-[380px] rounded-xl shadow-md border border-slate-300 bg-white object-contain"
                     />
                   )
                 )}
-                <span className="text-[11px] font-semibold text-slate-500 mt-2.5 text-center">
-                  L&apos;etichetta stampata mostra chiaramente <strong>Nome Cliente</strong>,{' '}
-                  <strong>N° Impegno</strong>
-                  {previewCommitment.installer_name
-                    ? `, Installatore (${previewCommitment.installer_name})`
-                    : ''}{' '}
-                  e il <strong>QR Code con logo {previewCommitment.category === 'VELUX' ? 'VELUX' : 'Saggin'}</strong>.
+                <span className="text-[11px] font-semibold text-slate-500 mt-3 text-center">
+                  Anteprima reale dell&apos;etichetta{' '}
+                  {printMode === 'DYMO'
+                    ? `(${DYMO_LABEL_FORMATS.find((f) => f.id === dymoFormat)?.name})`
+                    : '(Formato A4)'}
                 </span>
               </div>
 
               {/* Print & PDF Controls */}
-              <div className="lg:col-span-5 space-y-4">
-                <div>
-                  <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-2">
-                    1. Formato Impaginazione su Foglio A4
-                  </label>
-                  <div className="space-y-2">
-                    {(
-                      [
-                        {
-                          id: '1_big',
-                          title: '1 Etichetta Grande su A4',
-                          desc: 'Ideale per bancali interi o cartellone collo',
-                        },
-                        {
-                          id: '2_half',
-                          title: '2 Etichette Medie su A4 (Consigliato)',
-                          desc: 'Mezzo foglio A4 con linea tratteggiata per taglierina',
-                        },
-                        {
-                          id: '4_grid',
-                          title: '4 Etichette Compatte su A4 (Griglia 2x2)',
-                          desc: 'Formato adesivo per scatole o colli singoli con linee taglio',
-                        },
-                      ] as const
-                    ).map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setPrintLayout(opt.id)}
-                        className={`w-full p-3 rounded-xl border text-left transition-all flex items-start gap-2.5 ${
-                          printLayout === opt.id
-                            ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
-                            : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-slate-100'
-                        }`}
-                      >
-                        <CheckCircle2
-                          className={`w-4 h-4 mt-0.5 shrink-0 ${
-                            printLayout === opt.id ? 'text-red-400' : 'text-slate-400'
-                          }`}
-                        />
-                        <div>
-                          <div className="text-xs font-extrabold">{opt.title}</div>
-                          <div
-                            className={`text-[11px] ${
-                              printLayout === opt.id ? 'text-slate-300' : 'text-slate-500'
-                            }`}
-                          >
-                            {opt.desc}
-                          </div>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
+              <div className="lg:col-span-6 space-y-4">
+                {/* Target Printer Mode Switch: DYMO vs A4 */}
+                <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1.5 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setPrintMode('DYMO')}
+                    className={`py-2 px-3 rounded-lg text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all ${
+                      printMode === 'DYMO'
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Tag className="w-4 h-4 text-amber-400" />
+                    <span>Stampante DYMO</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPrintMode('A4')}
+                    className={`py-2 px-3 rounded-lg text-xs font-extrabold flex items-center justify-center gap-1.5 transition-all ${
+                      printMode === 'A4'
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Foglio A4 / PDF</span>
+                  </button>
                 </div>
 
+                {printMode === 'DYMO' ? (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-1.5">
+                        1. Formato Rotolo Etichette DYMO
+                      </label>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {DYMO_LABEL_FORMATS.map((fmt) => (
+                          <button
+                            key={fmt.id}
+                            type="button"
+                            onClick={() => setDymoFormat(fmt.id)}
+                            className={`p-2.5 rounded-xl border text-left transition-all ${
+                              dymoFormat === fmt.id
+                                ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                                : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-slate-100'
+                            }`}
+                          >
+                            <div className="text-xs font-extrabold">{fmt.name}</div>
+                            <div
+                              className={`text-[10px] font-mono ${
+                                dymoFormat === fmt.id ? 'text-slate-300' : 'text-slate-500'
+                              }`}
+                            >
+                              Cod. {fmt.code}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* DYMO Connect Web Service Detection Box */}
+                    <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600">
+                          Collegamento DYMO Connect
+                        </span>
+                        <button
+                          type="button"
+                          onClick={refreshDymoPrinters}
+                          disabled={isProbingDymo}
+                          className="text-[11px] font-bold text-red-600 hover:text-red-700 flex items-center gap-1"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isProbingDymo ? 'animate-spin' : ''}`} />
+                          <span>Rileva DYMO</span>
+                        </button>
+                      </div>
+
+                      {dymoPrinters.length > 0 ? (
+                        <select
+                          value={selectedDymoPrinter}
+                          onChange={(e) => setSelectedDymoPrinter(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 text-xs font-bold text-emerald-900"
+                        >
+                          {dymoPrinters.map((p) => (
+                            <option key={p.name} value={p.name}>
+                              {p.name} {p.isConnected ? '(Pronta)' : '(Non collegata)'}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 leading-snug">
+                          {isProbingDymo
+                            ? 'Ricerca servizio DYMO Connect in corso...'
+                            : 'Se DYMO Connect Web Service è attivo sul PC stampa con 1 clic; altrimenti si aprirà la stampa diretta già impostata sul formato DYMO.'}
+                        </p>
+                      )}
+                      {dymoStatusMsg && (
+                        <p className="text-[11px] font-bold text-emerald-700">{dymoStatusMsg}</p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-2">
+                      1. Formato Impaginazione su Foglio A4
+                    </label>
+                    <div className="space-y-1.5">
+                      {(
+                        [
+                          {
+                            id: '1_big',
+                            title: '1 Etichetta Grande su A4',
+                            desc: 'Ideale per bancali interi o cartellone collo',
+                          },
+                          {
+                            id: '2_half',
+                            title: '2 Etichette Medie su A4',
+                            desc: 'Mezzo foglio A4 con linea tratteggiata per taglierina',
+                          },
+                          {
+                            id: '4_grid',
+                            title: '4 Etichette Compatte su A4 (Griglia 2×2)',
+                            desc: 'Formato adesivo per scatole o colli singoli con linee taglio',
+                          },
+                        ] as const
+                      ).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setPrintLayout(opt.id)}
+                          className={`w-full p-2.5 rounded-xl border text-left transition-all flex items-start gap-2.5 ${
+                            printLayout === opt.id
+                              ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
+                              : 'bg-slate-50 text-slate-800 border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          <CheckCircle2
+                            className={`w-4 h-4 mt-0.5 shrink-0 ${
+                              printLayout === opt.id ? 'text-red-400' : 'text-slate-400'
+                            }`}
+                          />
+                          <div>
+                            <div className="text-xs font-extrabold">{opt.title}</div>
+                            <div
+                              className={`text-[11px] ${
+                                printLayout === opt.id ? 'text-slate-300' : 'text-slate-500'
+                              }`}
+                            >
+                              {opt.desc}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Number of packages / copies */}
-                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-xs font-extrabold uppercase tracking-wider text-slate-700">
-                      2. Numero di Colli / Etichette da Stampare
+                      2. Numero Colli / Copie
                     </label>
                     <span className="text-xs font-black text-slate-900">
-                      {packagesCount} {packagesCount === 1 ? 'Collo' : 'Colli'}
+                      {packagesCount} {packagesCount === 1 ? 'Etichetta' : 'Etichette'}
                     </span>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -1385,26 +1063,44 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
                 </div>
 
                 {/* Action Buttons */}
-                <div className="space-y-2.5 pt-2">
-                  <button
-                    type="button"
-                    disabled={isExporting}
-                    onClick={handlePrintA4}
-                    className="w-full py-3 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-sm shadow-md shadow-red-600/20 flex items-center justify-center gap-2"
-                  >
-                    <Printer className="w-4 h-4" />
-                    <span>Stampa Foglio A4 Pronto Taglierina</span>
-                  </button>
+                <div className="space-y-2 pt-1">
+                  {printMode === 'DYMO' ? (
+                    <button
+                      type="button"
+                      disabled={isExporting}
+                      onClick={handlePrintDymoDirect}
+                      className="w-full py-3 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-sm shadow-md shadow-red-600/20 flex items-center justify-center gap-2"
+                    >
+                      <Tag className="w-4 h-4" />
+                      <span>
+                        {dymoPrinters.length > 0
+                          ? `Stampa Diretta su ${selectedDymoPrinter}`
+                          : 'Stampa su Stampante DYMO'}
+                      </span>
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={isExporting}
+                        onClick={handlePrintA4}
+                        className="w-full py-3 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-sm shadow-md shadow-red-600/20 flex items-center justify-center gap-2"
+                      >
+                        <Printer className="w-4 h-4" />
+                        <span>Stampa Foglio A4 Pronto Taglierina</span>
+                      </button>
 
-                  <button
-                    type="button"
-                    disabled={isExporting}
-                    onClick={handleDownloadPdf}
-                    className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2"
-                  >
-                    <FileDown className="w-4 h-4" />
-                    <span>Scarica PDF A4 Alta Risoluzione (.pdf)</span>
-                  </button>
+                      <button
+                        type="button"
+                        disabled={isExporting}
+                        onClick={handleDownloadPdf}
+                        className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2"
+                      >
+                        <FileDown className="w-4 h-4" />
+                        <span>Scarica PDF A4 Alta Risoluzione (.pdf)</span>
+                      </button>
+                    </>
+                  )}
 
                   <button
                     type="button"
@@ -1412,7 +1108,7 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
                     className="w-full py-2 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs flex items-center justify-center gap-2"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    <span>Scarica Immagine Etichetta Singola (.png)</span>
+                    <span>Scarica Immagine Etichetta (.png)</span>
                   </button>
                 </div>
               </div>

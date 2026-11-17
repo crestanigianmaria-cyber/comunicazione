@@ -20,18 +20,19 @@ function cleanToken(str: string | null | undefined, maxLen = 80): string {
  * Keeping the payload concise ensures a low QR Version (large, crisp modules) that scans in <0.1s.
  */
 export function encodeCommitmentQrPayload(commitment: CustomerCommitment): string {
-  const itemsPart = commitment.items
+  const itemsPart = (commitment.items || [])
     .slice(0, 20)
     .map((it) => {
       const code = cleanToken(it.product_code, 24);
       const qty = Number(it.quantity) || 1;
       const um = cleanToken(it.unit_of_measure || 'PZ', 8);
-      // Only include description in QR if it's a manual/non-catalog item
       const isManual = !code || code.toUpperCase() === 'MANUALE';
       const desc = isManual ? cleanToken(it.product_description, 28) : '';
       return desc ? `${code}~${qty}~${um}~${desc}` : `${code}~${qty}~${um}`;
     })
     .join(';');
+
+  const notesToken = cleanToken(commitment.notes, 80);
 
   return [
     'IMP',
@@ -40,6 +41,7 @@ export function encodeCommitmentQrPayload(commitment: CustomerCommitment): strin
     commitment.category === 'VELUX' ? 'V' : 'S',
     cleanToken(commitment.installer_name, 24),
     itemsPart,
+    notesToken,
   ].join('|');
 }
 
@@ -49,6 +51,7 @@ export interface DecodedCommitmentQr {
   customer_name: string;
   category: CommitmentCategory;
   installer_name: string | null;
+  notes: string | null;
   items: CommitmentItem[];
 }
 
@@ -93,16 +96,18 @@ export function decodeCommitmentQrPayload(rawText: string): DecodedCommitmentQr 
       customer_name: customer_name.trim(),
       category,
       installer_name,
+      notes: null,
       items,
     };
   }
 
-  // Compact 6-part format: IMP|number|customer|V/S|installer|items
+  // Compact format: IMP|number|customer|V/S|installer|items|notes
   if (parts.length < 5) return null;
-  const [, commitment_number, customer_name, categoryRaw, installerRaw = '', itemsRaw = ''] = parts;
+  const [, commitment_number, customer_name, categoryRaw, installerRaw = '', itemsRaw = '', notesRaw = ''] = parts;
   const category: CommitmentCategory =
     categoryRaw === 'V' || categoryRaw === 'VELUX' ? 'VELUX' : 'STANDARD';
   const installer_name = installerRaw?.trim() ? installerRaw.trim() : null;
+  const notes = notesRaw?.trim() ? notesRaw.trim() : null;
 
   const items: CommitmentItem[] = itemsRaw
     .split(';')
@@ -126,6 +131,7 @@ export function decodeCommitmentQrPayload(rawText: string): DecodedCommitmentQr 
     customer_name: customer_name.trim(),
     category,
     installer_name,
+    notes,
     items,
   };
 }

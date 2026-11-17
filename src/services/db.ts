@@ -1176,7 +1176,7 @@ export async function createCustomerCommitment(input: {
   category: CommitmentCategory;
   installer_name?: string | null;
   notes?: string | null;
-  items: {
+  items?: {
     id?: string;
     product_id?: string | null;
     product_code: string;
@@ -1191,13 +1191,10 @@ export async function createCustomerCommitment(input: {
   if (!input.commitment_number.trim()) {
     throw new Error("Inserisci il numero di impegno cliente.");
   }
-  if (!input.items || input.items.length === 0) {
-    throw new Error("Aggiungi almeno un articolo all'impegno cliente.");
-  }
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const formattedItems: CommitmentItem[] = input.items.map(it => ({
+  const formattedItems: CommitmentItem[] = (input.items || []).map(it => ({
     id: it.id || crypto.randomUUID(),
     product_id: it.product_id || null,
     product_code: (it.product_code || 'ART').trim(),
@@ -1254,7 +1251,7 @@ export async function createCustomerCommitment(input: {
         .select()
         .single();
 
-      if (!headerErr && dbRow) {
+      if (!headerErr && dbRow && formattedItems.length > 0) {
         const dbItems = formattedItems.map(it => ({
           id: it.id,
           order_id: dbRow.id,
@@ -1289,7 +1286,7 @@ export async function updateCustomerCommitment(
     installer_name?: string | null;
     notes?: string | null;
     status?: CommitmentStatus;
-    items: {
+    items?: {
       id?: string;
       product_id?: string | null;
       product_code: string;
@@ -1307,7 +1304,7 @@ export async function updateCustomerCommitment(
 
   const existing = current[idx];
   const now = new Date().toISOString();
-  const formattedItems: CommitmentItem[] = input.items.map(it => ({
+  const formattedItems: CommitmentItem[] = (input.items || []).map(it => ({
     id: crypto.randomUUID(),
     product_id: it.product_id || null,
     product_code: (it.product_code || 'ART').trim(),
@@ -1359,20 +1356,22 @@ export async function updateCustomerCommitment(
 
       await supabase.from('order_items').delete().eq('order_id', id);
 
-      const dbItems = formattedItems.map(it => ({
-        id: it.id,
-        order_id: id,
-        product_id: it.product_id,
-        line_type: 'PRODUCT',
-        manual_description: null,
-        product_code_snapshot: it.product_code,
-        product_description_snapshot: it.product_description,
-        unit_of_measure_snapshot: it.unit_of_measure,
-        alternative_code_snapshot: null,
-        quantity: it.quantity,
-        created_at: now,
-      }));
-      await supabase.from('order_items').insert(dbItems);
+      if (formattedItems.length > 0) {
+        const dbItems = formattedItems.map(it => ({
+          id: it.id,
+          order_id: id,
+          product_id: it.product_id,
+          line_type: 'PRODUCT',
+          manual_description: null,
+          product_code_snapshot: it.product_code,
+          product_description_snapshot: it.product_description,
+          unit_of_measure_snapshot: it.unit_of_measure,
+          alternative_code_snapshot: null,
+          quantity: it.quantity,
+          created_at: now,
+        }));
+        await supabase.from('order_items').insert(dbItems);
+      }
     } catch (err) {
       console.warn('[Commitments] Cloud update error:', err);
     }

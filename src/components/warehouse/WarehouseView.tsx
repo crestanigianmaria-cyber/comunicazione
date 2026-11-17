@@ -159,6 +159,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     number: string;
     customer: string;
     installer?: string | null;
+    notes?: string | null;
     category: 'STANDARD' | 'VELUX';
     count: number;
   } | null>(null);
@@ -677,9 +678,15 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                   )}
                 </div>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Inseriti automaticamente <strong>{loadedCommitmentBanner.count} articoli</strong>{' '}
-                  dall&apos;etichetta QR impegno. Puoi aggiungere altra merce o inviare l&apos;ordine.
+                  {loadedCommitmentBanner.count > 0
+                    ? `Inseriti ${loadedCommitmentBanner.count} articoli e impostato il riferimento cliente. Puoi aggiungere altra merce o inviare l'ordine.`
+                    : `Riferimento cliente e N° Impegno impostati automaticamente sull'ordine. Scansiona o aggiungi gli articoli da spedire.`}
                 </p>
+                {loadedCommitmentBanner.notes && (
+                  <p className="text-xs font-bold text-amber-800 bg-amber-100/80 border border-amber-200 rounded-lg px-2.5 py-1 mt-1.5">
+                    Note: {loadedCommitmentBanner.notes}
+                  </p>
+                )}
               </div>
             </div>
             <button

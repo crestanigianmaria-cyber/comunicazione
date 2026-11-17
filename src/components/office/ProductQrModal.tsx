@@ -5,9 +5,14 @@ import { Product, CompanySettings } from '../../types';
 import {
   downloadQrSheetsAsPdf,
   printQrSheetsDirectly,
-  loadSagginLogo,
   QrSheetPresetId,
 } from '../../lib/qrSheetGenerator';
+import {
+  detectDymoPrinters,
+  printViaDymoWebService,
+  printDymoViaBrowserDriver,
+  renderProductDymoCanvas,
+} from '../../lib/dymoPrinter';
 
 interface ProductQrModalProps {
   product: Product | null;
@@ -100,6 +105,23 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
         },
         `QR_${product.code}_A4.pdf`
       );
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handlePrintDymo = async () => {
+    if (isBusy) return;
+    setIsBusy(true);
+    try {
+      const dymoCanvas = await renderProductDymoCanvas(product, '89x36');
+      const printers = await detectDymoPrinters();
+      const activePrinter = printers.find((p) => p.isConnected) || printers[0];
+      if (activePrinter) {
+        await printViaDymoWebService(activePrinter, dymoCanvas, '89x36', copiesCount);
+      } else {
+        printDymoViaBrowserDriver(dymoCanvas, '89x36', copiesCount);
+      }
     } finally {
       setIsBusy(false);
     }
@@ -282,7 +304,17 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
             <span>PNG Singolo</span>
           </button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handlePrintDymo}
+              disabled={isBusy}
+              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+              title="Stampa direttamente su rotolo termico DYMO 89×36 mm"
+            >
+              <Tag className="w-3.5 h-3.5 text-amber-400" />
+              <span>DYMO 89×36</span>
+            </button>
             <button
               type="button"
               onClick={handleDownloadPdf}
