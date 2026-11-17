@@ -12,6 +12,7 @@ import {
   printViaDymoWebService,
   printDymoViaBrowserDriver,
   renderProductDymoCanvas,
+  renderDymoFerramentaSheetCanvas,
 } from '../../lib/dymoPrinter';
 
 interface ProductQrModalProps {
@@ -110,17 +111,23 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
     }
   };
 
-  const handlePrintDymo = async () => {
+  const handlePrintDymo = async (miniSixPerLabel = false) => {
     if (isBusy) return;
     setIsBusy(true);
     try {
-      const dymoCanvas = await renderProductDymoCanvas(product, '89x36');
+      const dymoCanvas = miniSixPerLabel
+        ? await renderDymoFerramentaSheetCanvas(
+            Array.from({ length: 6 }, () => product),
+            '70x54'
+          )
+        : await renderProductDymoCanvas(product, '70x54');
       const printers = await detectDymoPrinters();
       const activePrinter = printers.find((p) => p.isConnected) || printers[0];
+      const labelCopies = miniSixPerLabel ? Math.max(1, Math.ceil(copiesCount / 6)) : copiesCount;
       if (activePrinter) {
-        await printViaDymoWebService(activePrinter, dymoCanvas, '89x36', copiesCount);
+        await printViaDymoWebService(activePrinter, dymoCanvas, '70x54', labelCopies);
       } else {
-        printDymoViaBrowserDriver(dymoCanvas, '89x36', copiesCount);
+        printDymoViaBrowserDriver(dymoCanvas, '70x54', labelCopies);
       }
     } finally {
       setIsBusy(false);
@@ -173,11 +180,12 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
         {/* Body */}
         <div className="p-5 overflow-y-auto space-y-4">
           {/* Size Selector */}
-          <div className="grid grid-cols-3 gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 text-xs font-bold">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 text-xs font-bold">
             {(
               [
+                { id: 'qr_2x2_117', label: 'Mini 2×2 cm' },
                 { id: 'qr_3x3_20', label: 'QR 3×3 cm' },
-                { id: 'qr_3.5x3.5_16', label: 'QR 3.5×3.5 cm' },
+                { id: 'qr_3.5x3.5_16', label: 'QR 3.5×3.5' },
                 { id: 'qr_4x4_12', label: 'QR 4×4 cm' },
               ] as const
             ).map((opt) => (
@@ -307,13 +315,23 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={handlePrintDymo}
+              onClick={() => handlePrintDymo(false)}
               disabled={isBusy}
               className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-black flex items-center gap-1.5 shadow-sm transition cursor-pointer"
-              title="Stampa direttamente su rotolo termico DYMO 89×36 mm"
+              title="Stampa etichetta singola su DYMO 99015 (70×54 mm)"
             >
               <Tag className="w-3.5 h-3.5 text-amber-400" />
-              <span>DYMO 89×36</span>
+              <span>DYMO 70×54</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePrintDymo(true)}
+              disabled={isBusy}
+              className="px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black flex items-center gap-1.5 shadow-sm transition cursor-pointer"
+              title="Stampa 6 mini-etichette da 2×2 cm su una sola etichetta DYMO 99015 (70×54 mm) per ferramenta"
+            >
+              <Tag className="w-3.5 h-3.5" />
+              <span>DYMO 6× Mini 2×2</span>
             </button>
             <button
               type="button"
@@ -322,7 +340,7 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
               className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black flex items-center gap-1.5 shadow-sm transition cursor-pointer"
             >
               <FileDown className="w-3.5 h-3.5" />
-              <span>Scarica PDF A4</span>
+              <span>PDF A4</span>
             </button>
             <button
               type="button"

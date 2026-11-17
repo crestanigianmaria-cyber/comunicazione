@@ -15,7 +15,8 @@ import {
   Square,
   Sparkles,
   FileDown,
-  Layers
+  Layers,
+  Tag
 } from 'lucide-react';
 import { Product, CompanySettings } from '../../types';
 import { searchProducts } from '../../lib/search';
@@ -27,6 +28,10 @@ import {
   downloadQrSheetsAsPdf,
   printQrSheetsDirectly,
 } from '../../lib/qrSheetGenerator';
+import {
+  renderDymoFerramentaSheetCanvas,
+  printDymoCanvasesBatch,
+} from '../../lib/dymoPrinter';
 
 interface BatchQrPrintModalProps {
   allCatalogProducts: Product[];
@@ -65,6 +70,7 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
   const [isRenderingPreview, setIsRenderingPreview] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [isPrintingDymo, setIsPrintingDymo] = useState(false);
 
   // Stop mouse drag selection when mouse button is released anywhere
   useEffect(() => {
@@ -256,6 +262,22 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
     }
   };
 
+  const handlePrintDymoMiniBatch = async () => {
+    if (productsToPrint.length === 0 || isPrintingDymo) return;
+    setIsPrintingDymo(true);
+    try {
+      const canvases: HTMLCanvasElement[] = [];
+      for (let i = 0; i < productsToPrint.length; i += 6) {
+        const chunk = productsToPrint.slice(i, i + 6);
+        const c = await renderDymoFerramentaSheetCanvas(chunk, '70x54');
+        canvases.push(c);
+      }
+      await printDymoCanvasesBatch(canvases, '70x54');
+    } finally {
+      setIsPrintingDymo(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-3 select-none">
       <div className="bg-white w-full max-w-[1400px] h-[95vh] rounded-2xl shadow-2xl overflow-hidden border border-slate-300 flex flex-col">
@@ -283,8 +305,23 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
             </div>
           </div>
 
-          {/* Primary Actions: Download Real PDF & Direct Print */}
-          <div className="flex items-center gap-2">
+          {/* Primary Actions: DYMO 99015 Mini 2x2 + Download Real PDF + Direct Print */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handlePrintDymoMiniBatch}
+              disabled={productsToPrint.length === 0 || isPrintingDymo}
+              className="px-3.5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 text-xs font-black flex items-center gap-2 transition shadow-md disabled:opacity-40 cursor-pointer"
+              title="Stampa su DYMO 99015 (70×54 mm) impaginando 6 mini-etichette da 2×2 cm su ciascuna etichetta"
+            >
+              <Tag className="w-4 h-4 stroke-[2.5]" />
+              <span>
+                {isPrintingDymo
+                  ? 'Preparazione DYMO...'
+                  : `DYMO 70×54 · 6 Mini 2×2/etich. (${Math.max(1, Math.ceil(productsToPrint.length / 6))})`}
+              </span>
+            </button>
+
             <button
               type="button"
               onClick={handleDownloadPdf}

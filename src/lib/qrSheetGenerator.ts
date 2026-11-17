@@ -2,6 +2,7 @@ import QRCode from 'qrcode';
 import { Product, CompanySettings } from '../types';
 
 export type QrSheetPresetId =
+  | 'qr_2x2_117'      // Ferramenta 2x2 cm · 9 col x 13 righe (117/foglio) · Mini per minuteria
   | 'qr_3x3_20'       // QR 3x3 cm · 4 col x 5 righe (20/foglio) · Spazio extra per nomi lunghi
   | 'qr_3x3_30'       // QR 3x3 cm · 5 col x 6 righe (30/foglio) · Alta densità
   | 'qr_3.5x3.5_16'   // QR 3.5x3.5 cm · 4 col x 4 righe (16/foglio) · Medio-Grande
@@ -20,6 +21,16 @@ export interface QrSheetPreset {
 }
 
 export const QR_SHEET_PRESETS: QrSheetPreset[] = [
+  {
+    id: 'qr_2x2_117',
+    label: 'Ferramenta 2×2 cm · Mini (117/foglio)',
+    qrSizeCm: '2×2 cm (Mini)',
+    qrMm: 12.5,
+    cols: 9,
+    rows: 13,
+    orientation: 'vertical',
+    description: '9×13 mini-etichette (21×21 mm) · Ideale per ferramenta, viti, bulloni e sacchetti piccoli',
+  },
   {
     id: 'qr_3x3_20',
     label: 'QR 3×3 cm · Standard (20/foglio)',
@@ -355,8 +366,9 @@ export async function renderA4SheetToCanvas(
       // ================================================================
       // VERTICAL LABEL LAYOUT (Top Bar -> Centered QR -> Full Description)
       // ================================================================
-      const padX = 2.0 * PX_PER_MM;
-      const headerH = (preset.rows >= 6 ? 5.6 : 6.8) * PX_PER_MM;
+      const isMiniCell = preset.rows >= 10;
+      const padX = (isMiniCell ? 1.0 : 2.0) * PX_PER_MM;
+      const headerH = (isMiniCell ? 3.4 : preset.rows >= 6 ? 5.6 : 6.8) * PX_PER_MM;
 
       // Top Header Bar
       if (options.darkHeaderStyle) {
@@ -373,56 +385,66 @@ export async function renderA4SheetToCanvas(
         ctx.stroke();
       }
 
-      let codeStartX = cellX + padX;
-      if (options.showHeaderLogo && logoImg) {
-        const lh = headerH * 0.68;
-        const lw = (logoImg.width / logoImg.height) * lh;
-        const ly = cellY + (headerH - lh) / 2;
-        if (options.darkHeaderStyle) {
-          ctx.fillStyle = '#ffffff';
-          ctx.beginPath();
-          ctx.roundRect(codeStartX - 2, ly - 1, lw + 4, lh + 2, 3);
-          ctx.fill();
+      if (isMiniCell) {
+        // Mini 2x2 cm cell: centered product code in top bar for maximum legibility
+        const codeFontPx = Math.round(2.1 * PX_PER_MM);
+        ctx.fillStyle = options.darkHeaderStyle ? '#ffffff' : '#0f172a';
+        ctx.font = `900 ${codeFontPx}px "JetBrains Mono", monospace`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(product.code, cellX + cellWidthPx / 2, cellY + headerH / 2, cellWidthPx - padX * 2);
+      } else {
+        let codeStartX = cellX + padX;
+        if (options.showHeaderLogo && logoImg) {
+          const lh = headerH * 0.68;
+          const lw = (logoImg.width / logoImg.height) * lh;
+          const ly = cellY + (headerH - lh) / 2;
+          if (options.darkHeaderStyle) {
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            ctx.roundRect(codeStartX - 2, ly - 1, lw + 4, lh + 2, 3);
+            ctx.fill();
+          }
+          ctx.drawImage(logoImg, codeStartX, ly, lw, lh);
+          codeStartX += lw + 1.4 * PX_PER_MM;
         }
-        ctx.drawImage(logoImg, codeStartX, ly, lw, lh);
-        codeStartX += lw + 1.4 * PX_PER_MM;
-      }
 
-      // Draw Product Code
-      const codeFontPx = Math.round((preset.rows >= 6 ? 2.6 : 3.1) * PX_PER_MM);
-      ctx.fillStyle = options.darkHeaderStyle ? '#ffffff' : '#0f172a';
-      ctx.font = `800 ${codeFontPx}px "JetBrains Mono", monospace`;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(product.code, codeStartX, cellY + headerH / 2);
+        // Draw Product Code
+        const codeFontPx = Math.round((preset.rows >= 6 ? 2.6 : 3.1) * PX_PER_MM);
+        ctx.fillStyle = options.darkHeaderStyle ? '#ffffff' : '#0f172a';
+        ctx.font = `800 ${codeFontPx}px "JetBrains Mono", monospace`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(product.code, codeStartX, cellY + headerH / 2);
 
-      // Draw Unit of Measure on far right of header
-      if (options.showUnitBadge && product.unit_of_measure) {
-        const umFontPx = Math.round((preset.rows >= 6 ? 2.1 : 2.4) * PX_PER_MM);
-        ctx.fillStyle = options.darkHeaderStyle ? '#f87171' : '#dc2626';
-        ctx.font = `800 ${umFontPx}px "JetBrains Mono", monospace`;
-        ctx.textAlign = 'right';
-        ctx.fillText(
-          product.unit_of_measure.toUpperCase(),
-          cellX + cellWidthPx - padX,
-          cellY + headerH / 2
-        );
+        // Draw Unit of Measure on far right of header
+        if (options.showUnitBadge && product.unit_of_measure) {
+          const umFontPx = Math.round((preset.rows >= 6 ? 2.1 : 2.4) * PX_PER_MM);
+          ctx.fillStyle = options.darkHeaderStyle ? '#f87171' : '#dc2626';
+          ctx.font = `800 ${umFontPx}px "JetBrains Mono", monospace`;
+          ctx.textAlign = 'right';
+          ctx.fillText(
+            product.unit_of_measure.toUpperCase(),
+            cellX + cellWidthPx - padX,
+            cellY + headerH / 2
+          );
+        }
       }
 
       // Draw QR Code Centered below header
       const qrSizePx = preset.qrMm * PX_PER_MM;
       const qrX = cellX + (cellWidthPx - qrSizePx) / 2;
-      const qrY = cellY + headerH + 1.0 * PX_PER_MM;
+      const qrY = cellY + headerH + (isMiniCell ? 0.5 : 1.0) * PX_PER_MM;
       ctx.drawImage(qrCanvas, qrX, qrY, qrSizePx, qrSizePx);
 
       // Full Description Area underneath the QR code
-      const descTopY = qrY + qrSizePx + 0.8 * PX_PER_MM;
-      const descBottomPad = 1.2 * PX_PER_MM;
+      const descTopY = qrY + qrSizePx + (isMiniCell ? 0.4 : 0.8) * PX_PER_MM;
+      const descBottomPad = (isMiniCell ? 0.5 : 1.2) * PX_PER_MM;
       const descBoxHeight = cellY + cellHeightPx - descTopY - descBottomPad;
       const descBoxWidth = cellWidthPx - padX * 2;
 
-      const maxDescFont = Math.round((preset.rows >= 6 ? 2.3 : 2.8) * PX_PER_MM);
-      const minDescFont = Math.round(1.65 * PX_PER_MM);
+      const maxDescFont = Math.round((isMiniCell ? 1.65 : preset.rows >= 6 ? 2.3 : 2.8) * PX_PER_MM);
+      const minDescFont = Math.round((isMiniCell ? 1.25 : 1.65) * PX_PER_MM);
 
       const fitted = fitFullDescriptionInBox(
         ctx,
