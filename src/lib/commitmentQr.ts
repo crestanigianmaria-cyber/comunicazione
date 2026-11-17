@@ -130,8 +130,24 @@ export function decodeCommitmentQrPayload(rawText: string): DecodedCommitmentQr 
   };
 }
 
+let cachedVeluxLogoImg: HTMLImageElement | null = null;
+
+export async function loadVeluxLogo(): Promise<HTMLImageElement | null> {
+  if (cachedVeluxLogoImg) return cachedVeluxLogoImg;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      cachedVeluxLogoImg = img;
+      resolve(img);
+    };
+    img.onerror = () => resolve(null);
+    img.src = '/velux-logo.png';
+  });
+}
+
 /**
- * Draws the iconic red & white VELUX vector logo onto a 2D canvas context.
+ * Fallback vector VELUX logo if image hasn't loaded
  */
 export function drawVeluxLogo(
   ctx: CanvasRenderingContext2D,
@@ -141,176 +157,141 @@ export function drawVeluxLogo(
   height: number
 ): void {
   ctx.save();
-  // Velux corporate red background
-  ctx.fillStyle = '#e3001b';
-  ctx.beginPath();
-  ctx.roundRect(x, y, width, height, Math.max(3, Math.round(height * 0.12)));
-  ctx.fill();
-
-  // White border inside
-  ctx.strokeStyle = '#ffffff';
-  ctx.lineWidth = Math.max(1.5, width * 0.02);
-  ctx.strokeRect(x + 2, y + 2, width - 4, height - 4);
-
-  // Bold white VELUX text
+  ctx.fillStyle = '#e30613';
+  ctx.fillRect(x, y, width, height);
   ctx.fillStyle = '#ffffff';
   const fontSize = Math.round(height * 0.56);
   ctx.font = `900 ${fontSize}px "Arial Black", "Plus Jakarta Sans", Impact, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('VELUX', x + width / 2, y + height / 2 + 1);
+  ctx.fillText('VELUX®', x + width / 2, y + height / 2 + 1);
   ctx.restore();
 }
 
 /**
- * Renders a complete, self-contained Printable Commitment Label Card onto a high-res Canvas.
- * Even if saved as PNG or printed, the image itself clearly displays:
- * - SAGGIN logo (+ VELUX logo if Velux)
- * - IMPEGNO N° (Large bold)
- * - CLIENTE (Full name, never truncated)
- * - INSTALLATORE (Piazza / Pauletto / Custom, if present)
- * - High-DPI QR Code with VELUX or SAGGIN logo embedded in its center
- * - List of committed items
+ * Word-wraps text cleanly inside maxWidthPx
+ */
+function wrapSimpleText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidthPx: number
+): string[] {
+  const words = text.trim().split(/\s+/);
+  const lines: string[] = [];
+  let current = '';
+  for (const w of words) {
+    const candidate = current ? `${current} ${w}` : w;
+    if (ctx.measureText(candidate).width <= maxWidthPx) {
+      current = candidate;
+    } else {
+      if (current) lines.push(current);
+      current = w;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+}
+
+/**
+ * Renders a minimal, clean, modern Commitment QR Sticker Card:
+ * - Standard: Logo Saggin + QR Code + Numero Impegno + Nome Cliente (+ Installatore se presente)
+ * - VELUX: Logo Saggin + Logo VELUX ufficiale + QR Code + Numero Impegno + Nome Cliente + Installatore
+ * Zero extra tables or clutter.
  */
 export async function renderCommitmentLabelCanvas(
   commitment: CustomerCommitment,
   colloNumber?: { current: number; total: number }
 ): Promise<HTMLCanvasElement> {
-  const logoImg = await loadSagginLogo();
+  const [sagginImg, veluxImg] = await Promise.all([loadSagginLogo(), loadVeluxLogo()]);
   const isVelux = commitment.category === 'VELUX';
+  const hasInstaller = Boolean(commitment.installer_name && commitment.installer_name.trim());
 
-  const W = 900;
-  // Dynamic height based on number of items so nothing is cut off
-  const itemRowsCount = Math.min(commitment.items.length, 12);
-  const H = 1120 + itemRowsCount * 36;
+  const W = 760;
+  const H = hasInstaller ? 920 : 850;
 
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext('2d')!;
 
-  // White background + outer border
+  // Pure white background
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
-  ctx.strokeStyle = '#0f172a';
-  ctx.lineWidth = 4;
-  ctx.strokeRect(2, 2, W - 4, H - 4);
 
-  // 1. Top Header Bar (Dark Navy or Velux Red Accent)
-  const headerH = 96;
-  ctx.fillStyle = '#0b0f19';
-  ctx.fillRect(0, 0, W, headerH);
-  ctx.fillStyle = isVelux ? '#e3001b' : '#dc2626';
-  ctx.fillRect(0, headerH - 8, W, 8);
+  // Clean outer rounded card frame
+  const borderPad = 14;
+  ctx.strokeStyle = isVelux ? '#e30613' : '#0f172a';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.roundRect(borderPad, borderPad, W - borderPad * 2, H - borderPad * 2, 28);
+  ctx.stroke();
 
-  // Saggin Logo on left
-  if (logoImg) {
-    const lh = 54;
-    const lw = (logoImg.width / logoImg.height) * lh;
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.roundRect(24, 16, lw + 16, lh + 8, 8);
-    ctx.fill();
-    ctx.drawImage(logoImg, 32, 20, lw, lh);
-  }
+  // 1. Top Brand Logo Header (Clean White Area with Saggin Logo & VELUX Logo)
+  const topBarY = borderPad + 24;
+  const logoAreaH = 74;
 
-  // Title in header center/right
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '900 26px "Plus Jakarta Sans", Arial, sans-serif';
-  ctx.textAlign = isVelux ? 'center' : 'right';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(
-    isVelux ? 'IMPEGNO CLIENTE · REPARTO VELUX' : 'SCHEDA IMPEGNO CLIENTE',
-    isVelux ? W / 2 + 20 : W - 28,
-    headerH / 2 - 4
-  );
-
-  // If Velux, draw VELUX logo on top right of header
   if (isVelux) {
-    drawVeluxLogo(ctx, W - 170, 18, 144, 54);
-  }
+    // Left: Saggin Logo | Divider | Right: Official VELUX Logo
+    const centerX = W / 2;
 
-  let cursorY = headerH + 22;
+    if (sagginImg) {
+      const sh = 58;
+      const sw = (sagginImg.width / sagginImg.height) * sh;
+      ctx.drawImage(sagginImg, centerX - 28 - sw, topBarY + (logoAreaH - sh) / 2, sw, sh);
+    }
 
-  // 2. Prominent Customer & Commitment Number Box (ALWAYS visible on print!)
-  const infoBoxX = 28;
-  const infoBoxW = W - 56;
-  const hasInstaller = Boolean(commitment.installer_name && commitment.installer_name.trim());
-  const infoBoxH = hasInstaller ? 195 : 150;
-
-  ctx.fillStyle = isVelux ? '#fff1f2' : '#f8fafc';
-  ctx.strokeStyle = isVelux ? '#fecdd3' : '#cbd5e1';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.roundRect(infoBoxX, cursorY, infoBoxW, infoBoxH, 14);
-  ctx.fill();
-  ctx.stroke();
-
-  // Impegno Number Badge
-  ctx.fillStyle = '#64748b';
-  ctx.font = '800 18px "JetBrains Mono", monospace';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillText('IMPEGNO CLIENTE N°:', infoBoxX + 22, cursorY + 16);
-
-  ctx.fillStyle = '#dc2626';
-  ctx.font = '900 38px "JetBrains Mono", monospace';
-  ctx.fillText(commitment.commitment_number || '—', infoBoxX + 240, cursorY + 8);
-
-  if (colloNumber && colloNumber.total > 1) {
-    ctx.fillStyle = '#0f172a';
-    ctx.font = '900 22px "JetBrains Mono", monospace';
-    ctx.textAlign = 'right';
-    ctx.fillText(
-      `COLLO ${colloNumber.current}/${colloNumber.total}`,
-      infoBoxX + infoBoxW - 22,
-      cursorY + 16
-    );
-  }
-
-  // Divider inside info box
-  ctx.strokeStyle = '#e2e8f0';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(infoBoxX + 20, cursorY + 58);
-  ctx.lineTo(infoBoxX + infoBoxW - 20, cursorY + 58);
-  ctx.stroke();
-
-  // Customer Name (auto-scaled so full name always fits)
-  ctx.fillStyle = '#64748b';
-  ctx.font = '800 17px "JetBrains Mono", monospace';
-  ctx.textAlign = 'left';
-  ctx.fillText('CLIENTE:', infoBoxX + 22, cursorY + 72);
-
-  const custName = (commitment.customer_name || 'CLIENTE').toUpperCase();
-  const custFontPx = custName.length > 32 ? 26 : custName.length > 22 ? 32 : 38;
-  ctx.fillStyle = '#0f172a';
-  ctx.font = `900 ${custFontPx}px "Plus Jakarta Sans", Arial, sans-serif`;
-  ctx.fillText(custName, infoBoxX + 22, cursorY + 96, infoBoxW - 44);
-
-  // Installer Row (Piazza / Pauletto / Custom)
-  if (hasInstaller) {
-    ctx.fillStyle = '#0f172a';
+    // Subtle vertical divider between Saggin and VELUX logos
+    ctx.strokeStyle = '#cbd5e1';
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.roundRect(infoBoxX + 22, cursorY + 144, infoBoxW - 44, 38, 8);
-    ctx.fill();
+    ctx.moveTo(centerX, topBarY + 10);
+    ctx.lineTo(centerX, topBarY + logoAreaH - 10);
+    ctx.stroke();
 
-    ctx.fillStyle = '#fbbf24';
-    ctx.font = '900 20px "JetBrains Mono", monospace';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(
-      `INSTALLATORE: ${(commitment.installer_name || '').toUpperCase()}`,
-      infoBoxX + 36,
-      cursorY + 163
-    );
+    if (veluxImg) {
+      const vh = 60;
+      const vw = (veluxImg.width / veluxImg.height) * vh;
+      ctx.drawImage(veluxImg, centerX + 28, topBarY + (logoAreaH - vh) / 2, vw, vh);
+    } else {
+      drawVeluxLogo(ctx, centerX + 28, topBarY + 8, 175, 58);
+    }
+  } else {
+    // Standard Commitment: Saggin Logo centered at top
+    if (sagginImg) {
+      const sh = 64;
+      const sw = (sagginImg.width / sagginImg.height) * sh;
+      ctx.drawImage(sagginImg, (W - sw) / 2, topBarY + (logoAreaH - sh) / 2, sw, sh);
+    }
   }
 
-  cursorY += infoBoxH + 20;
+  let cursorY = topBarY + logoAreaH + 18;
 
-  // 3. Large High-Resolution QR Code (100% pure unobstructed matrix for instant camera scanning)
+  // 2. Commitment Number Pill (IMPEGNO N° ...)
+  const pillW = W - 96;
+  const pillH = 66;
+  const pillX = 48;
+
+  ctx.fillStyle = isVelux ? '#e30613' : '#0f172a';
+  ctx.beginPath();
+  ctx.roundRect(pillX, cursorY, pillW, pillH, 16);
+  ctx.fill();
+
+  const impLabel =
+    colloNumber && colloNumber.total > 1
+      ? `IMPEGNO N° ${commitment.commitment_number}  ·  COLLO ${colloNumber.current}/${colloNumber.total}`
+      : `IMPEGNO N° ${commitment.commitment_number}`;
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `900 ${impLabel.length > 26 ? 26 : 31}px "JetBrains Mono", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(impLabel, W / 2, cursorY + pillH / 2 + 1, pillW - 32);
+
+  cursorY += pillH + 20;
+
+  // 3. Pure, Unobstructed High-Contrast QR Code in the Center
   const qrPayload = encodeCommitmentQrPayload(commitment);
-  const qrSize = 460;
+  const qrSize = 440;
   const qrCanvas = document.createElement('canvas');
   await QRCode.toCanvas(qrCanvas, qrPayload, {
     width: qrSize,
@@ -319,114 +300,81 @@ export async function renderCommitmentLabelCanvas(
     color: { dark: '#000000', light: '#ffffff' },
   });
 
-  // Draw a self-contained cuttable QR Sticker Frame so even if someone cuts ONLY the QR square,
-  // it clearly shows Logo (VELUX / Saggin) + Nome Cliente + Numero Impegno (+ Installatore)!
-  const stickerW = qrSize + 80;
-  const stickerH = qrSize + 114;
-  const stickerX = (W - stickerW) / 2;
-  const stickerY = cursorY;
+  const qrX = (W - qrSize) / 2;
+  ctx.drawImage(qrCanvas, qrX, cursorY, qrSize, qrSize);
 
-  ctx.save();
-  ctx.fillStyle = '#ffffff';
-  ctx.strokeStyle = isVelux ? '#e3001b' : '#0f172a';
-  ctx.lineWidth = 3;
-  ctx.setLineDash([10, 6]);
+  cursorY += qrSize + 16;
+
+  // Subtle horizontal divider above Customer Name
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(stickerX, stickerY, stickerW, stickerH, 12);
-  ctx.fill();
+  ctx.moveTo(64, cursorY);
+  ctx.lineTo(W - 64, cursorY);
   ctx.stroke();
-  ctx.setLineDash([]);
 
-  // Top bar inside QR sticker: VELUX/Saggin Logo + IMPEGNO N°
-  ctx.fillStyle = isVelux ? '#e3001b' : '#0f172a';
-  ctx.beginPath();
-  ctx.roundRect(stickerX + 6, stickerY + 6, stickerW - 12, 46, 8);
-  ctx.fill();
+  cursorY += 18;
 
-  if (isVelux) {
-    drawVeluxLogo(ctx, stickerX + 16, stickerY + 12, 92, 34);
-  } else if (logoImg) {
-    const sh = 30;
-    const sw = (logoImg.width / logoImg.height) * sh;
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.roundRect(stickerX + 14, stickerY + 12, sw + 8, sh + 4, 4);
-    ctx.fill();
-    ctx.drawImage(logoImg, stickerX + 18, stickerY + 14, sw, sh);
+  // 4. Customer Name (Large, Bold, Centered)
+  ctx.fillStyle = '#64748b';
+  ctx.font = '800 16px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('CLIENTE', W / 2, cursorY);
+
+  cursorY += 24;
+
+  const custName = (commitment.customer_name || 'CLIENTE').toUpperCase();
+  const maxCustW = W - 96;
+  let custFont = 40;
+  let custLines: string[] = [custName];
+
+  for (let f = 40; f >= 24; f -= 2) {
+    ctx.font = `900 ${f}px "Plus Jakarta Sans", Arial, sans-serif`;
+    const wrapped = wrapSimpleText(ctx, custName, maxCustW);
+    if (wrapped.length === 1 || (wrapped.length <= 2 && f <= 30)) {
+      custFont = f;
+      custLines = wrapped.slice(0, 2);
+      break;
+    }
   }
 
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '900 22px "JetBrains Mono", monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(
-    `IMPEGNO N° ${commitment.commitment_number}`,
-    W / 2 + 34,
-    stickerY + 29
-  );
-
-  // Draw pure QR Canvas centered inside the sticker frame
-  const qrX = (W - qrSize) / 2;
-  ctx.drawImage(qrCanvas, qrX, stickerY + 56, qrSize, qrSize);
-
-  // Bottom bar inside QR sticker: CLIENTE (+ Installatore)
-  const bottomLabel = hasInstaller
-    ? `${custName} · INST: ${(commitment.installer_name || '').toUpperCase()}`
-    : `CLIENTE: ${custName}`;
   ctx.fillStyle = '#0f172a';
-  ctx.font = `900 ${bottomLabel.length > 34 ? 19 : 23}px "Plus Jakarta Sans", Arial, sans-serif`;
+  ctx.font = `900 ${custFont}px "Plus Jakarta Sans", Arial, sans-serif`;
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(bottomLabel, W / 2, stickerY + 56 + qrSize + 28, stickerW - 24);
-  ctx.restore();
+  ctx.textBaseline = 'top';
+  const lineH = Math.round(custFont * 1.15);
+  custLines.forEach((line, idx) => {
+    ctx.fillText(line, W / 2, cursorY + idx * lineH, maxCustW);
+  });
 
-  cursorY += stickerH + 18;
+  cursorY += custLines.length * lineH + 16;
 
-  // 4. Table of Committed Items at bottom of label
-  ctx.fillStyle = '#0f172a';
-  ctx.fillRect(28, cursorY, W - 56, 34);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '800 16px "JetBrains Mono", monospace';
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(
-    `MERCE IMPEGNATA (${commitment.items.length} ${commitment.items.length === 1 ? 'ARTICOLO' : 'ARTICOLI'})`,
-    42,
-    cursorY + 17
-  );
-  cursorY += 38;
+  // 5. Installer Badge (if VELUX or if installer is specified)
+  if (hasInstaller) {
+    const instBoxW = W - 120;
+    const instBoxH = 54;
+    const instBoxX = 60;
+    const instBoxY = Math.min(cursorY, H - borderPad - instBoxH - 22);
 
-  const shownItems = commitment.items.slice(0, 12);
-  for (let i = 0; i < shownItems.length; i++) {
-    const it = shownItems[i];
-    if (i % 2 === 1) {
-      ctx.fillStyle = '#f8fafc';
-      ctx.fillRect(28, cursorY, W - 56, 34);
-    }
-    ctx.fillStyle = '#0f172a';
-    ctx.font = '800 17px "JetBrains Mono", monospace';
-    ctx.textAlign = 'left';
+    ctx.fillStyle = '#f8fafc';
+    ctx.strokeStyle = isVelux ? '#fecdd3' : '#cbd5e1';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.roundRect(instBoxX, instBoxY, instBoxW, instBoxH, 14);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = isVelux ? '#e30613' : '#0f172a';
+    ctx.font = '900 23px "Plus Jakarta Sans", Arial, sans-serif';
+    ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(`${it.product_code}`, 38, cursorY + 17);
-
-    ctx.fillStyle = '#334155';
-    ctx.font = '700 17px "Plus Jakarta Sans", Arial, sans-serif';
-    const descClean =
-      it.product_description.length > 48
-        ? it.product_description.slice(0, 48) + '...'
-        : it.product_description;
-    ctx.fillText(descClean, 195, cursorY + 17);
-
-    ctx.fillStyle = '#dc2626';
-    ctx.font = '900 19px "JetBrains Mono", monospace';
-    ctx.textAlign = 'right';
     ctx.fillText(
-      `${it.quantity} ${it.unit_of_measure}`,
-      W - 40,
-      cursorY + 17
+      `INSTALLATORE: ${(commitment.installer_name || '').toUpperCase()}`,
+      W / 2,
+      instBoxY + instBoxH / 2 + 1,
+      instBoxW - 28
     );
-
-    cursorY += 34;
   }
 
   return canvas;

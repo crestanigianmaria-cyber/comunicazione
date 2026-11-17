@@ -418,14 +418,14 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div className="flex items-start sm:items-center gap-3.5">
           <div
-            className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 shadow-sm font-black text-white ${
+            className={`h-12 px-2.5 rounded-2xl flex items-center justify-center shrink-0 shadow-sm font-black text-white ${
               sectionTab === 'VELUX'
-                ? 'bg-[#e30613] shadow-red-600/25'
-                : 'bg-slate-900 shadow-slate-900/15'
+                ? 'bg-white border-2 border-[#e30613]'
+                : 'bg-slate-900 shadow-slate-900/15 w-12'
             }`}
           >
             {sectionTab === 'VELUX' ? (
-              <span className="text-xs tracking-wider font-black">VELUX</span>
+              <img src="/velux-logo.png" alt="VELUX" className="h-7 w-auto object-contain" />
             ) : (
               <QrCode className="w-6 h-6" />
             )}
@@ -446,7 +446,7 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
             <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
               {readOnly
                 ? "Consulta gli impegni preparati dall'ufficio o scansiona il QR sulla merce da 'Nuovo Carico' per inserire subito tutti gli articoli nell'ordine."
-                : 'Inserisci Cliente, N° Impegno, eventuale Installatore e Merce: genera il QR Code con Nome Cliente e N° Impegno visibili da appiccicare ai colli.'}
+                : 'Inserisci Cliente, N° Impegno, eventuale Installatore e Merce: genera il QR Code pulito con Nome Cliente e N° Impegno da applicare ai colli.'}
             </p>
           </div>
         </div>
@@ -478,15 +478,11 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
                 : 'text-slate-700 hover:bg-red-50 hover:text-[#e30613]'
             }`}
           >
-            <span
-              className={`px-1.5 py-0.5 rounded text-[10px] font-black tracking-wider ${
-                sectionTab === 'VELUX'
-                  ? 'bg-white text-[#e30613]'
-                  : 'bg-[#e30613] text-white'
-              }`}
-            >
-              VELUX
-            </span>
+            <img
+              src="/velux-logo.png"
+              alt="VELUX"
+              className="h-4 w-auto rounded-xs bg-white p-0.5 object-contain"
+            />
             <span>Sezione VELUX</span>
             <span
               className={`px-1.5 py-0.5 text-[11px] rounded-md font-extrabold ${
