@@ -16,11 +16,11 @@ export const PWAInstallButton: React.FC = () => {
     return (
       <button
         onClick={install}
-        className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 active:scale-95 transition"
+        className="flex items-center gap-1.5 rounded-lg bg-red-600 px-2.5 py-2 text-xs font-bold text-white shadow-xs hover:bg-red-500 active:scale-95 transition touch-manipulation"
         title="Installa l'app sul dispositivo"
       >
-        <Download className="w-3.5 h-3.5" />
-        <span className="whitespace-nowrap">Installa App</span>
+        <Download className="w-3.5 h-3.5 shrink-0" />
+        <span className="hidden sm:inline whitespace-nowrap">Installa App</span>
       </button>
     );
   }
@@ -31,11 +31,11 @@ export const PWAInstallButton: React.FC = () => {
       <>
         <button
           onClick={() => setShowIOSGuide(true)}
-          className="flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 transition"
+          className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-2 text-xs font-bold text-slate-200 hover:bg-slate-800 transition touch-manipulation"
           title="Installa su iPhone / iPad"
         >
-          <Smartphone className="w-3.5 h-3.5 text-blue-600" />
-          <span className="whitespace-nowrap">Installa su iPhone</span>
+          <Smartphone className="w-3.5 h-3.5 text-red-400 shrink-0" />
+          <span className="hidden sm:inline whitespace-nowrap">Installa App</span>
         </button>
 
         {showIOSGuide && (

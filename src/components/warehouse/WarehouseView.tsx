@@ -41,13 +41,45 @@ interface WarehouseViewProps {
   onOpenExcelModal?: () => void;
 }
 
+const DRAFT_STORAGE_KEY = 'magazzino_active_draft_v1';
+const RECENT_CODES_STORAGE_KEY = 'magazzino_recent_product_codes_v1';
+
+interface SavedDraft {
+  customerReference?: string;
+  documentType?: OrderDocumentType | null;
+  cart?: CartItem[];
+}
+
+function loadSavedDraft(): SavedDraft {
+  try {
+    const raw = localStorage.getItem(DRAFT_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as SavedDraft;
+  } catch {
+    return {};
+  }
+}
+
+function loadRecentCodes(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_CODES_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.slice(0, 8) : [];
+  } catch {
+    return [];
+  }
+}
+
 export const WarehouseView: React.FC<WarehouseViewProps> = ({
   products,
   companySettings,
   isOnline,
   isProductsLoading = false,
 }) => {
-  const [customerReference, setCustomerReference] = useState('');
+  const initialDraft = useMemo(() => loadSavedDraft(), []);
+
+  const [customerReference, setCustomerReference] = useState(() => initialDraft.customerReference || '');
   const [warehouseLocation, setWarehouseLocation] = useState<WarehouseLocation>(() => {
     try {
       return (localStorage.getItem('saggin_warehouse_location') as WarehouseLocation) || 'MAGAZZINO';
@@ -57,10 +89,11 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   });
   const [unitOptions, setUnitOptions] = useState<Record<string, string[]>>({});
   const [newUnitDraft, setNewUnitDraft] = useState<Record<string, string>>({});
-  const [documentType, setDocumentType] = useState<OrderDocumentType | null>(null);
+  const [documentType, setDocumentType] = useState<OrderDocumentType | null>(() => initialDraft.documentType || null);
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
-  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cart, setCart] = useState<CartItem[]>(() => Array.isArray(initialDraft.cart) ? initialDraft.cart : []);
+  const [recentCodes, setRecentCodes] = useState<string[]>(() => loadRecentCodes());
   const [showDescriptionEditor, setShowDescriptionEditor] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -74,6 +107,44 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   const [keypadFreshOpen, setKeypadFreshOpen] = useState<boolean>(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Persist active draft automatically so phone lock / refresh never loses a load in progress
+  React.useEffect(() => {
+    try {
+      if (cart.length === 0 && !customerReference.trim() && !documentType) {
+        localStorage.removeItem(DRAFT_STORAGE_KEY);
+      } else {
+        localStorage.setItem(
+          DRAFT_STORAGE_KEY,
+          JSON.stringify({ customerReference, documentType, cart })
+        );
+      }
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [cart, customerReference, documentType]);
+
+  // Preload custom unit options for any restored cart items
+  React.useEffect(() => {
+    for (const item of cart) {
+      if (item.product?.id && !unitOptions[item.product.id]) {
+        const pid = item.product.id;
+        void fetchProductUnitOptions(pid).then(options =>
+          setUnitOptions(prev => ({ ...prev, [pid]: options }))
+        );
+      }
+    }
+  }, []);
+
+  // Resolve recent products from catalog for 1-tap quick add
+  const recentProducts = useMemo(() => {
+    if (recentCodes.length === 0 || products.length === 0) return [];
+    const byCode = new Map(products.map(p => [p.code, p]));
+    return recentCodes
+      .map(code => byCode.get(code))
+      .filter((p): p is Product => Boolean(p))
+      .slice(0, 6);
+  }, [recentCodes, products]);
 
   // Map of product codes currently in cart for instant visual indicator during search
   const cartQuantitiesByCode = useMemo(() => {
@@ -117,6 +188,18 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   const handleAddProduct = (product: Product) => {
     if (!documentType) return;
     triggerHaptic();
+
+    // Track in recent products for 1-tap quick picks
+    setRecentCodes(prev => {
+      const next = [product.code, ...prev.filter(c => c !== product.code)].slice(0, 8);
+      try {
+        localStorage.setItem(RECENT_CODES_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore
+      }
+      return next;
+    });
+
     setCart(prevCart => {
       const existingIndex = prevCart.findIndex(item => item.product?.code === product.code);
       if (existingIndex > -1) {
@@ -278,8 +361,8 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   // ------------------------------------------------------------------------
   if (submittedOrderNumber) {
     return (
-      <div className="min-h-[calc(100vh-6rem)] flex flex-col justify-center items-center px-4 py-8 text-center select-none">
-        <div className="w-full max-w-md bg-white p-7 sm:p-9 rounded-2xl border border-slate-200 shadow-xl flex flex-col items-center">
+      <div className="min-h-[calc(100dvh-7rem)] flex flex-col items-center px-4 py-6 text-center select-none">
+        <div className="w-full max-w-md my-auto bg-white p-6 sm:p-9 rounded-2xl border border-slate-200 shadow-xl flex flex-col items-center">
           <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mb-5 border border-emerald-200">
             <CheckCircle2 className="w-11 h-11 stroke-[2.5]" />
           </div>
@@ -320,26 +403,31 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   // MAIN WAREHOUSE TERMINAL (MOBILE, PORTRAIT TABLET & WINDOWS TOUCH TABLET)
   // ------------------------------------------------------------------------
   return (
-    <div className="min-h-[calc(100vh-5rem)] flex flex-col justify-between pb-28 sm:pb-32">
-      <div className="max-w-4xl mx-auto w-full space-y-4">
+    <div className="min-h-[calc(100dvh-6rem)] flex flex-col justify-between pb-28 sm:pb-32">
+      <div className="max-w-4xl mx-auto w-full space-y-3.5 sm:space-y-4">
         {/* STEP 1: ORDER HEADER & DOCUMENT CONFIG */}
         <section className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
           {/* Section Bar */}
-          <div className="bg-slate-900 text-white px-4 py-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5">
-              <span className="w-6 h-6 rounded-md bg-red-600 text-white font-mono text-xs font-black flex items-center justify-center">
+          <div className="bg-slate-900 text-white px-3.5 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="w-6 h-6 rounded-md bg-red-600 text-white font-mono text-xs font-black flex items-center justify-center shrink-0">
                 1
               </span>
-              <h1 className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-white">
-                Impostazione Carico & Documento
+              <h1 className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-white truncate">
+                Impostazione Carico
               </h1>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-mono font-bold px-2.5 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700">
-                {warehouseLocation === 'DEPOSITO' ? 'SEDE: DEPOSITO' : 'SEDE: MAGAZZINO'}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {cart.length > 0 && (
+                <span className="hidden sm:inline-flex text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                  BOZZA SALVATA
+                </span>
+              )}
+              <span className="text-[10px] sm:text-[11px] font-mono font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700">
+                {warehouseLocation === 'DEPOSITO' ? 'DEPOSITO' : 'MAGAZZINO'}
               </span>
               <span
-                className={`text-[11px] font-mono font-bold px-2.5 py-0.5 rounded ${
+                className={`text-[10px] sm:text-[11px] font-mono font-bold px-2 py-0.5 rounded ${
                   isOnline
                     ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                     : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
@@ -350,7 +438,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
             </div>
           </div>
 
-          <div className="p-4 sm:p-5 space-y-4">
+          <div className="p-3.5 sm:p-5 space-y-4">
             {/* Row 1: Warehouse Location + Customer/Truck Reference (Side-by-side on Tablet/Desktop) */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-end">
               {/* Punto di Carico (5 cols on tablet) */}
@@ -427,7 +515,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
             {/* Row 2: Document Type Selector (4 large touch cards on tablet, 2x2 on phone) */}
             <div>
-              <div className="flex items-center justify-between gap-2 mb-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1.5">
                 <label className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
                   Tipo Documento Richiesto <span className="text-red-600">*</span>
                 </label>
@@ -504,17 +592,17 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
         <section className="relative z-30">
           <div className="bg-white rounded-2xl border border-slate-200/90 p-3 sm:p-4 shadow-xs">
             <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <span className="w-6 h-6 rounded-md bg-slate-900 text-white font-mono text-xs font-black flex items-center justify-center">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-6 h-6 rounded-md bg-slate-900 text-white font-mono text-xs font-black flex items-center justify-center shrink-0">
                   2
                 </span>
-                <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900">
-                  Ricerca Rapida Articoli ({products.length} a listino)
+                <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 truncate">
+                  Ricerca Rapida Articoli ({products.length})
                 </span>
               </div>
               {documentType && (
                 <span className="hidden sm:inline text-[11px] font-medium text-slate-400">
-                  Tocca un risultato per aggiungerlo al carico
+                  Ricerca multi-parola attiva (es. "cemento 25")
                 </span>
               )}
             </div>
@@ -534,7 +622,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                     ? 'Sincronizzazione catalogo articoli in corso...'
                     : !documentType
                     ? '↑ Seleziona prima il Tipo Documento qui sopra...'
-                    : 'Digita codice articolo, descrizione materiale o codice alternativo...'
+                    : 'Digita codice, parole chiave (es. "cemento 25") o cod. alternativo...'
                 }
                 className={`w-full h-14 pl-12 pr-12 rounded-xl text-sm sm:text-base font-bold transition placeholder:text-slate-400 ${
                   !documentType
@@ -552,6 +640,45 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                 </button>
               )}
             </div>
+
+            {/* 1-Tap Recent / Frequent Products Strip (when documentType is selected and search is empty) */}
+            {documentType && !searchQuery.trim() && recentProducts.length > 0 && (
+              <div className="mt-2.5 pt-2.5 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                    Aggiunta Rapida · Articoli Caricati di Recente
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+                  {recentProducts.map(prod => {
+                    const inCartQty = cartQuantitiesByCode[prod.code];
+                    return (
+                      <button
+                        key={prod.code}
+                        type="button"
+                        onClick={() => handleAddProduct(prod)}
+                        className={`shrink-0 h-9 px-2.5 rounded-lg border text-left flex items-center gap-1.5 text-xs transition active:scale-95 touch-manipulation ${
+                          inCartQty
+                            ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                            : 'bg-slate-50 border-slate-200 hover:border-slate-300 text-slate-800'
+                        }`}
+                      >
+                        <Plus className="w-3.5 h-3.5 text-red-600 shrink-0 stroke-[2.5]" />
+                        <span className="font-mono font-black text-[11px]">{prod.code}</span>
+                        <span className="font-semibold text-[11px] max-w-[140px] truncate text-slate-600">
+                          {prod.description}
+                        </span>
+                        {inCartQty !== undefined && (
+                          <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-mono text-[10px] font-black">
+                            {inCartQty}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {isProductsLoading && (
               <div className="mt-2.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-center text-xs font-semibold text-slate-700">

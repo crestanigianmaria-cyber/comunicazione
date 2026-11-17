@@ -68,10 +68,11 @@ if (broadcastChannel) {
   };
 }
 
-// Initialize Server-Sent Events (SSE) for Real-Time Cross-Device Communication
-if (typeof window !== 'undefined' && typeof EventSource !== 'undefined') {
+// Initialize Server-Sent Events (SSE) only for legacy local server mode (when Supabase is not configured)
+if (typeof window !== 'undefined' && typeof EventSource !== 'undefined' && !getSupabaseClient()) {
   let evtSource: EventSource | null = null;
   const connectSSE = () => {
+    if (getSupabaseClient()) return;
     try {
       evtSource = new EventSource('/api/events');
       evtSource.onmessage = async (e) => {
@@ -529,8 +530,9 @@ export async function createNewOrder(orderInput: {
     broadcastChannel.postMessage({ type: 'NEW_ORDER', payload: newOrder });
   }
 
-  // 4. Send to Central Server so all desktop computers and smartphones receive it immediately
-  if (typeof window !== 'undefined') {
+  // 4. Send to Central Server only if Supabase is not configured (legacy Express mode)
+  const supabase = getSupabaseClient();
+  if (typeof window !== 'undefined' && !supabase) {
     fetch('/api/orders', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -542,7 +544,6 @@ export async function createNewOrder(orderInput: {
 
   // 5. If online and Supabase is configured, push to Supabase
   const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
-  const supabase = getSupabaseClient();
 
   if (isOnline && supabase) {
     try {
@@ -666,8 +667,10 @@ export async function updateOrderStatus(orderId: string, newStatus: OrderStatus)
     broadcastChannel.postMessage({ type: 'ORDER_UPDATED', payload: updatedOrder });
   }
 
-  // Update on central server
-  if (typeof window !== 'undefined') {
+  const supabase = getSupabaseClient();
+
+  // Update on central server only if Supabase is not configured
+  if (typeof window !== 'undefined' && !supabase) {
     fetch(`/api/orders/${orderId}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -678,7 +681,6 @@ export async function updateOrderStatus(orderId: string, newStatus: OrderStatus)
   }
 
   // Update Supabase if available
-  const supabase = getSupabaseClient();
   if (supabase) {
     try {
       await supabase
@@ -835,6 +837,25 @@ export function subscribeToOrders(callback: OrderListener): () => void {
   // Setup Supabase Realtime subscription if client available
   const supabase = getSupabaseClient();
   let supabaseChannel: ReturnType<NonNullable<typeof supabase>['channel']> | null = null;
+  let realtimeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingInsertedOrderId: string | null = null;
+
+  const scheduleRealtimeRefresh = () => {
+    if (realtimeDebounceTimer) {
+      clearTimeout(realtimeDebounceTimer);
+    }
+    realtimeDebounceTimer = setTimeout(async () => {
+      realtimeDebounceTimer = null;
+      const insertedIdToNotify = pendingInsertedOrderId;
+      pendingInsertedOrderId = null;
+
+      const freshOrders = await fetchOrders(true);
+      const insertedOrder = insertedIdToNotify
+        ? freshOrders.find(order => order.id === insertedIdToNotify)
+        : undefined;
+      callback(freshOrders, insertedOrder);
+    }, 180);
+  };
 
   if (supabase) {
     try {
@@ -843,28 +864,22 @@ export function subscribeToOrders(callback: OrderListener): () => void {
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'orders' },
-          async (payload) => {
-            console.log('[Realtime] Orders change received:', payload);
-            const freshOrders = await fetchOrders(true);
+          (payload) => {
             const insertedId = (payload.new as { id?: string } | null)?.id;
-            const insertedOrder = payload.eventType === 'INSERT' && insertedId
-              ? freshOrders.find(order => order.id === insertedId)
-              : undefined;
-            callback(freshOrders, insertedOrder);
-            if (payload.eventType === 'INSERT') {
+            if (payload.eventType === 'INSERT' && insertedId) {
+              pendingInsertedOrderId = insertedId;
               playOrderNotificationChime();
             }
+            scheduleRealtimeRefresh();
           }
         )
-        // Order headers and their items are inserted in two requests. Listen
-        // to item changes too, so the office refreshes after the items arrive.
+        // Order headers and their items are inserted in two requests. Coalesce
+        // bursts of item inserts into a single debounced database fetch.
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'order_items' },
-          async (payload) => {
-            console.log('[Realtime] Order items change received:', payload);
-            const freshOrders = await fetchOrders(true);
-            callback(freshOrders);
+          () => {
+            scheduleRealtimeRefresh();
           }
         )
         .subscribe((status, err) => {
@@ -877,6 +892,9 @@ export function subscribeToOrders(callback: OrderListener): () => void {
 
   return () => {
     orderListeners.delete(callback);
+    if (realtimeDebounceTimer) {
+      clearTimeout(realtimeDebounceTimer);
+    }
     if (supabase && supabaseChannel) {
       supabase.removeChannel(supabaseChannel);
     }
@@ -1001,21 +1019,69 @@ export async function changeRolePassword(role: UserRole, newPass: string): Promi
   if (error) throw new Error(error.message);
 }
 
+// Shared alternative units for products (Supabase-backed + local cache to avoid N+1 network requests).
+const STORAGE_KEY_UNIT_OPTIONS = 'magazzino_product_units_cache_v1';
+let unitOptionsCache: Record<string, string[]> | null = null;
 
-// Shared alternative units for products (Supabase-backed).
+function getLocalUnitOptionsCache(): Record<string, string[]> {
+  if (unitOptionsCache !== null) return unitOptionsCache;
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_UNIT_OPTIONS);
+    unitOptionsCache = raw ? JSON.parse(raw) : {};
+  } catch {
+    unitOptionsCache = {};
+  }
+  return unitOptionsCache || {};
+}
+
+function saveLocalUnitOptionsCache(cache: Record<string, string[]>): void {
+  unitOptionsCache = cache;
+  try {
+    localStorage.setItem(STORAGE_KEY_UNIT_OPTIONS, JSON.stringify(cache));
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
 export async function fetchProductUnitOptions(productId: string): Promise<string[]> {
+  const cache = getLocalUnitOptionsCache();
   const supabase = getSupabaseClient();
-  if (!supabase) return [];
-  const { data, error } = await supabase.from('product_unit_options').select('unit').eq('product_id', productId).order('unit');
-  if (error) { console.warn('[Units] Could not load product units:', error); return []; }
-  return (data || []).map((row: any) => String(row.unit));
+  if (!supabase) return cache[productId] || [];
+
+  const { data, error } = await supabase
+    .from('product_unit_options')
+    .select('unit')
+    .eq('product_id', productId)
+    .order('unit');
+
+  if (error) {
+    console.warn('[Units] Could not load product units:', error);
+    return cache[productId] || [];
+  }
+
+  const units = (data || []).map((row: any) => String(row.unit));
+  saveLocalUnitOptionsCache({ ...cache, [productId]: units });
+  return units;
 }
 
 export async function saveProductUnitOption(productId: string, unit: string): Promise<void> {
   const normalized = unit.trim().toUpperCase();
   if (!normalized || normalized.length > 20) throw new Error('Inserisci un\'unità valida (massimo 20 caratteri).');
+
+  // Update local cache immediately for zero-latency UI
+  const cache = getLocalUnitOptionsCache();
+  const current = cache[productId] || [];
+  if (!current.includes(normalized)) {
+    saveLocalUnitOptionsCache({
+      ...cache,
+      [productId]: [...current, normalized].sort(),
+    });
+  }
+
   const supabase = getSupabaseClient();
   if (!supabase) throw new Error('Connessione a Supabase non disponibile: impossibile condividere la nuova unità.');
-  const { error } = await supabase.from('product_unit_options').upsert({ product_id: productId, unit: normalized }, { onConflict: 'product_id,unit', ignoreDuplicates: true });
+  const { error } = await supabase
+    .from('product_unit_options')
+    .upsert({ product_id: productId, unit: normalized }, { onConflict: 'product_id,unit', ignoreDuplicates: true });
   if (error) throw error;
 }

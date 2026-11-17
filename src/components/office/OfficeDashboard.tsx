@@ -64,11 +64,28 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
     let nuovi = 0;
     let inLavorazione = 0;
     let completati = 0;
+    let oggi = 0;
+    let magazzino = 0;
+    let deposito = 0;
+
+    const now = new Date();
 
     for (const order of activeOrders) {
       if (order.status === 'NUOVO') nuovi++;
       else if (order.status === 'PRESO IN CARICO') inLavorazione++;
       else if (order.status === 'COMPLETATO') completati++;
+
+      if (order.warehouse_location === 'DEPOSITO') deposito++;
+      else magazzino++;
+
+      const d = new Date(order.created_at);
+      if (
+        d.getDate() === now.getDate() &&
+        d.getMonth() === now.getMonth() &&
+        d.getFullYear() === now.getFullYear()
+      ) {
+        oggi++;
+      }
     }
 
     return {
@@ -76,6 +93,9 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
       inLavorazione,
       completati,
       totale: activeOrders.length,
+      oggi,
+      magazzino,
+      deposito,
     };
   }, [orders]);
 
@@ -293,7 +313,7 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
             </div>
           </button>
 
-          {/* KPI 4: Totale Ordini */}
+          {/* KPI 4: Totale Ordini & Flusso Sedi */}
           <button
             type="button"
             onClick={() => setStatusFilter('ALL')}
@@ -305,13 +325,13 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
           >
             <div>
               <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider block">
-                Totale Flusso Attivo
+                Totale Attivi (Oggi: {kpiStats.oggi})
               </span>
               <div className="text-3xl font-black font-mono tracking-tight text-slate-900 mt-1.5 tabular-nums">
                 {kpiStats.totale}
               </div>
-              <span className="text-[11px] text-slate-400 font-medium mt-0.5 block">
-                Tutte le distinte attive
+              <span className="text-[11px] text-slate-500 font-semibold mt-0.5 block">
+                Mag: {kpiStats.magazzino} · Dep: {kpiStats.deposito}
               </span>
             </div>
             <div className="w-11 h-11 rounded-xl bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center shrink-0">
@@ -479,6 +499,15 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                       hour: '2-digit',
                       minute: '2-digit',
                     });
+                    const diffMin = Math.max(0, Math.floor((Date.now() - dateObj.getTime()) / 60000));
+                    const waitLabel =
+                      diffMin < 1
+                        ? 'Adesso'
+                        : diffMin < 60
+                        ? `${diffMin} min fa`
+                        : diffMin < 1440
+                        ? `${Math.floor(diffMin / 60)}h fa`
+                        : null;
                     const productItems = order.items.filter(item => item.line_type !== 'DESCRIPTION');
                     const noteItems = order.items.filter(item => item.line_type === 'DESCRIPTION');
                     const isNew = order.status === 'NUOVO' && !isTrashView;
@@ -576,6 +605,11 @@ export const OfficeDashboard: React.FC<OfficeDashboardProps> = ({
                         <td className="py-3.5 px-4 align-top font-mono">
                           <div className="font-bold text-slate-800 text-xs">{formattedDate}</div>
                           <div className="text-[11px] text-slate-400">ore {formattedTime}</div>
+                          {order.status !== 'COMPLETATO' && waitLabel && (
+                            <span className="inline-block mt-0.5 text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200/70">
+                              {waitLabel}
+                            </span>
+                          )}
                         </td>
 
                         {/* Items Count */}

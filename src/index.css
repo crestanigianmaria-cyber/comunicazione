@@ -73,7 +73,7 @@
 }
 
 .pt-safe {
-  padding-top: env(safe-area-inset-top, 0.5rem);
+  padding-top: env(safe-area-inset-top, 0px);
 }
 
 .touch-manipulation {

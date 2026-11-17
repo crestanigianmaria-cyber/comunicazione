@@ -32,6 +32,27 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
   const [currentOrder, setCurrentOrder] = useState<Order>(order);
   const [isUpdating, setIsUpdating] = useState(false);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [copiedAll, setCopiedAll] = useState(false);
+  const [checkedItemIds, setCheckedItemIds] = useState<Record<string, boolean>>(() => {
+    try {
+      const raw = localStorage.getItem(`saggin_checked_items_${order.id}`);
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const toggleItemChecked = (itemId: string, forceValue?: boolean) => {
+    setCheckedItemIds(prev => {
+      const next = { ...prev, [itemId]: forceValue !== undefined ? forceValue : !prev[itemId] };
+      try {
+        localStorage.setItem(`saggin_checked_items_${currentOrder.id}`, JSON.stringify(next));
+      } catch {
+        // Ignore
+      }
+      return next;
+    });
+  };
 
   const handleStatusChange = async (newStatus: OrderStatus) => {
     if (newStatus === currentOrder.status || isUpdating) return;
@@ -47,10 +68,25 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
     }
   };
 
-  const handleCopyCode = (code: string) => {
+  const handleCopyCode = (code: string, itemId?: string) => {
     navigator.clipboard.writeText(code).catch(() => {});
     setCopiedCode(code);
+    if (itemId && !readOnly) {
+      toggleItemChecked(itemId, true);
+    }
     setTimeout(() => setCopiedCode(null), 1500);
+  };
+
+  const handleCopyAllRows = () => {
+    const lines = currentOrder.items.map(item => {
+      if (item.line_type === 'DESCRIPTION') {
+        return `NOTA\t${(item.manual_description || item.product_description_snapshot || '').replace(/\s+/g, ' ')}\t\t`;
+      }
+      return `${item.product_code_snapshot}\t${item.product_description_snapshot}\t${item.unit_of_measure_snapshot}\t${item.quantity}`;
+    });
+    navigator.clipboard.writeText(lines.join('\n')).catch(() => {});
+    setCopiedAll(true);
+    setTimeout(() => setCopiedAll(false), 2000);
   };
 
   const formattedDate = new Date(currentOrder.created_at).toLocaleDateString('it-IT', {
@@ -64,7 +100,9 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
     minute: '2-digit',
   });
 
-  const productItemsCount = currentOrder.items.filter(i => i.line_type !== 'DESCRIPTION').length;
+  const productItems = currentOrder.items.filter(i => i.line_type !== 'DESCRIPTION');
+  const productItemsCount = productItems.length;
+  const checkedProductsCount = productItems.filter(i => checkedItemIds[i.id]).length;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
@@ -85,6 +123,15 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCopyAllRows}
+              className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-slate-200 flex items-center gap-1.5 transition"
+              title="Copia tutte le righe separate da TAB per incollarle in Excel o nel gestionale"
+            >
+              {copiedAll ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span className="hidden md:inline">{copiedAll ? 'Righe Copiate!' : 'Copia Righe'}</span>
+            </button>
             <button
               type="button"
               onClick={() => onOpenPrint(currentOrder)}
@@ -186,12 +233,23 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
 
         {/* Snapshot Items Table */}
         <div className="p-4 sm:p-5 overflow-y-auto flex-1">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
-              Distinta Articoli ({productItemsCount} articoli · {currentOrder.items.length} righe totali)
-            </h4>
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+            <div className="flex items-center gap-2.5">
+              <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-800">
+                Distinta Articoli ({productItemsCount} articoli · {currentOrder.items.length} righe)
+              </h4>
+              {!readOnly && productItemsCount > 0 && (
+                <span className={`px-2 py-0.5 rounded-full text-[11px] font-mono font-bold ${
+                  checkedProductsCount === productItemsCount
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-slate-100 text-slate-600'
+                }`}>
+                  Inserite a gestionale: {checkedProductsCount}/{productItemsCount}
+                </span>
+              )}
+            </div>
             <span className="hidden sm:inline text-[11px] text-slate-400 font-medium">
-              Clicca sul codice articolo per copiarlo negli appunti
+              Clicca sul codice per copiarlo e spuntare automaticamente la riga
             </span>
           </div>
 
@@ -199,7 +257,8 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="bg-slate-100 border-b border-slate-200 font-mono font-extrabold text-slate-600 uppercase tracking-wider text-[10px]">
-                  <th className="py-2.5 px-3 w-12 text-center">#</th>
+                  {!readOnly && <th className="py-2.5 px-3 w-11 text-center" title="Spunta riga inserita in fattura/DDT">✓</th>}
+                  <th className="py-2.5 px-3 w-10 text-center">#</th>
                   <th className="py-2.5 px-3 w-36">Codice Articolo</th>
                   <th className="py-2.5 px-3">Descrizione Materiale</th>
                   <th className="py-2.5 px-3 w-32">Cod. Alternativo</th>
@@ -208,60 +267,87 @@ export const OrderDetailModal: React.FC<OrderDetailModalProps> = ({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200/70">
-                {currentOrder.items.map((item, index) => (
-                  <tr
-                    key={item.id}
-                    className={
-                      item.line_type === 'DESCRIPTION'
-                        ? 'bg-amber-50/70'
-                        : 'hover:bg-slate-50 transition'
-                    }
-                  >
-                    {item.line_type === 'DESCRIPTION' ? (
-                      <td colSpan={6} className="py-3 px-4 text-sm font-semibold text-slate-900 whitespace-pre-wrap">
-                        <span className="mr-2 inline-flex items-center gap-1 rounded bg-amber-200/80 px-2 py-0.5 text-[10px] font-mono font-black uppercase tracking-wide text-amber-950">
-                          <AlignLeft className="w-3 h-3" /> Nota
-                        </span>
-                        {item.manual_description || item.product_description_snapshot}
-                      </td>
-                    ) : (
-                      <>
-                        <td className="py-3 px-3 text-center text-slate-400 font-mono font-bold">
-                          {index + 1}
-                        </td>
-                        <td className="py-3 px-3">
-                          <button
-                            type="button"
-                            onClick={() => handleCopyCode(item.product_code_snapshot)}
-                            title="Clicca per copiare il codice"
-                            className="inline-flex items-center gap-1.5 font-mono font-black text-xs bg-slate-900 hover:bg-red-600 text-white px-2.5 py-1 rounded transition"
-                          >
-                            <span>{item.product_code_snapshot}</span>
-                            {copiedCode === item.product_code_snapshot ? (
-                              <Check className="w-3 h-3 text-emerald-300" />
-                            ) : (
-                              <Copy className="w-3 h-3 opacity-60" />
-                            )}
-                          </button>
-                        </td>
-                        <td className="py-3 px-3 font-bold text-slate-900 text-xs sm:text-sm">
-                          {item.product_description_snapshot}
-                        </td>
-                        <td className="py-3 px-3 font-mono text-slate-500">
-                          {item.alternative_code_snapshot || '—'}
-                        </td>
-                        <td className="py-3 px-3 text-center">
-                          <span className="font-mono font-extrabold text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 uppercase">
-                            {item.unit_of_measure_snapshot}
+                {currentOrder.items.map((item, index) => {
+                  const isChecked = Boolean(checkedItemIds[item.id]);
+                  return (
+                    <tr
+                      key={item.id}
+                      className={
+                        item.line_type === 'DESCRIPTION'
+                          ? 'bg-amber-50/70'
+                          : isChecked
+                          ? 'bg-emerald-50/40 transition'
+                          : 'hover:bg-slate-50 transition'
+                      }
+                    >
+                      {item.line_type === 'DESCRIPTION' ? (
+                        <td colSpan={readOnly ? 6 : 7} className="py-3 px-4 text-sm font-semibold text-slate-900 whitespace-pre-wrap">
+                          <span className="mr-2 inline-flex items-center gap-1 rounded bg-amber-200/80 px-2 py-0.5 text-[10px] font-mono font-black uppercase tracking-wide text-amber-950">
+                            <AlignLeft className="w-3 h-3" /> Nota
                           </span>
+                          {item.manual_description || item.product_description_snapshot}
                         </td>
-                        <td className="py-3 px-3 text-right font-mono font-black text-base text-slate-900 tabular-nums">
-                          {item.quantity}
-                        </td>
-                      </>
-                    )}
-                  </tr>
-                ))}
+                      ) : (
+                        <>
+                          {!readOnly && (
+                            <td className="py-3 px-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => toggleItemChecked(item.id)}
+                                className={`w-5 h-5 rounded border flex items-center justify-center mx-auto transition ${
+                                  isChecked
+                                    ? 'bg-emerald-600 border-emerald-600 text-white'
+                                    : 'bg-white border-slate-300 hover:border-slate-500'
+                                }`}
+                                title={isChecked ? 'Riga già inserita a gestionale' : 'Segna come inserita a gestionale'}
+                              >
+                                {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                              </button>
+                            </td>
+                          )}
+                          <td className="py-3 px-3 text-center text-slate-400 font-mono font-bold">
+                            {index + 1}
+                          </td>
+                          <td className="py-3 px-3">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyCode(item.product_code_snapshot, item.id)}
+                              title="Clicca per copiare il codice e spuntare la riga"
+                              className={`inline-flex items-center gap-1.5 font-mono font-black text-xs px-2.5 py-1 rounded transition ${
+                                isChecked
+                                  ? 'bg-emerald-700 hover:bg-emerald-600 text-white'
+                                  : 'bg-slate-900 hover:bg-red-600 text-white'
+                              }`}
+                            >
+                              <span>{item.product_code_snapshot}</span>
+                              {copiedCode === item.product_code_snapshot ? (
+                                <Check className="w-3 h-3 text-emerald-300" />
+                              ) : (
+                                <Copy className="w-3 h-3 opacity-60" />
+                              )}
+                            </button>
+                          </td>
+                          <td className={`py-3 px-3 font-bold text-xs sm:text-sm ${
+                            isChecked ? 'text-emerald-950 line-through decoration-emerald-600/50' : 'text-slate-900'
+                          }`}>
+                            {item.product_description_snapshot}
+                          </td>
+                          <td className="py-3 px-3 font-mono text-slate-500">
+                            {item.alternative_code_snapshot || '—'}
+                          </td>
+                          <td className="py-3 px-3 text-center">
+                            <span className="font-mono font-extrabold text-xs bg-slate-100 border border-slate-200 px-2 py-0.5 rounded text-slate-800 uppercase">
+                              {item.unit_of_measure_snapshot}
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-right font-mono font-black text-base text-slate-900 tabular-nums">
+                            {item.quantity}
+                          </td>
+                        </>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

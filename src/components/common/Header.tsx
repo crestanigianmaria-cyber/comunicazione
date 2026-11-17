@@ -51,14 +51,14 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-[#0b0f19] border-b border-slate-800 text-white select-none no-print shadow-sm">
+    <header className="sticky top-0 z-40 bg-[#0b0f19] border-b border-slate-800 text-white select-none no-print shadow-sm pt-safe">
       {/* Top 2px Saggin Corporate Accent Bar */}
       <div className="h-0.5 w-full bg-red-600" />
 
-      <div className="max-w-[1440px] mx-auto px-3 sm:px-6 h-15 flex items-center justify-between gap-3">
+      <div className="max-w-[1440px] mx-auto px-3 sm:px-6 min-h-14 py-1.5 flex items-center justify-between gap-2">
         {/* Zone 1: Brand Identity & Active Terminal Badge */}
-        <div className="flex items-center gap-3 shrink-0">
-          <div className="h-10 w-[4.5rem] rounded-lg bg-white border border-slate-200 shadow-xs flex items-center justify-center p-1 overflow-hidden shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="h-9 w-15 sm:h-10 sm:w-[4.5rem] rounded-lg bg-white border border-slate-200 shadow-xs flex items-center justify-center p-1 overflow-hidden shrink-0">
             <img
               src="/saggin-logo.png"
               alt="Logo Saggin"
@@ -68,12 +68,12 @@ export const Header: React.FC<HeaderProps> = ({
               decoding="async"
             />
           </div>
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2">
-              <span className="font-extrabold tracking-tight text-sm sm:text-base text-white whitespace-nowrap leading-none">
+          <div className="flex flex-col min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-extrabold tracking-tight text-sm sm:text-base text-white truncate leading-tight">
                 {companySettings.companyName || 'SAGGIN'}
               </span>
-              <span className={`text-[10px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded ${
+              <span className={`hidden sm:inline-flex text-[10px] font-mono font-bold uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0 ${
                 currentRole === 'magazzino'
                   ? 'bg-red-600/20 text-red-400 border border-red-500/30'
                   : 'bg-slate-800 text-slate-300 border border-slate-700'
@@ -81,7 +81,14 @@ export const Header: React.FC<HeaderProps> = ({
                 {currentRole === 'magazzino' ? 'TERMINALE PIAZZALE' : 'ERP UFFICIO'}
               </span>
             </div>
-            <span className="hidden sm:inline text-[11px] text-slate-400 font-medium leading-tight mt-0.5">
+            {/* Mobile compact subtitle + live status dot */}
+            <div className="flex sm:hidden items-center gap-1.5 mt-0.5">
+              <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isOnline ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 truncate">
+                {currentRole === 'magazzino' ? 'Magazzino' : 'Ufficio'} · {isOnline ? 'Online' : 'Offline'}
+              </span>
+            </div>
+            <span className="hidden sm:inline text-[11px] text-slate-400 font-medium leading-tight mt-0.5 truncate">
               Saggin Guglielmo S.R.L. · Gestione Ordini & Logistica
             </span>
           </div>

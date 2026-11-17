@@ -36,11 +36,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({ onLoginSuccess, defaultR
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0f19] flex flex-col justify-center items-center px-4 py-8 select-none">
+    <div className="min-h-dvh bg-[#0b0f19] flex flex-col items-center px-4 py-6 pt-safe pb-safe overflow-y-auto select-none">
       {/* Subtle top corporate bar */}
       <div className="fixed top-0 left-0 right-0 h-1 bg-red-600 z-50" />
 
-      <div className="w-full max-w-[440px] bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-800/40">
+      <div className="w-full max-w-[440px] my-auto bg-white rounded-2xl shadow-2xl overflow-hidden border border-slate-800/40">
         {/* Corporate Identity Header */}
         <div className="bg-[#0f172a] px-6 py-6 text-white border-b border-slate-800 relative">
           <div className="flex items-center gap-4">

@@ -17,8 +17,8 @@ export default defineConfig(() => {
           name: 'Saggin - Magazzino Edile',
           short_name: 'Saggin',
           description: 'Sistema di trasmissione ordini carico cantiere Saggin Guglielmo Materiali Edili.',
-          theme_color: '#ffffff',
-          background_color: '#ffffff',
+          theme_color: '#0b0f19',
+          background_color: '#0b0f19',
           display: 'standalone',
           start_url: '/',
           scope: '/',
@@ -53,6 +53,9 @@ export default defineConfig(() => {
         },
       }),
     ],
+    build: {
+      chunkSizeWarningLimit: 750,
+    },
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname || process.cwd(), '.'),
