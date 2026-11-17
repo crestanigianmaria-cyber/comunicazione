@@ -547,7 +547,7 @@ export async function renderA4SheetToCanvas(
  * Pure TypeScript Multi-Page A4 PDF Builder from rendered high-resolution canvases.
  * Zero external library dependencies, 100% compatible with Adobe Reader, Edge, Chrome & Windows Print.
  */
-function buildPdfFromJpegDataUrls(jpegDataUrls: string[], widthPt = 595.28, heightPt = 841.89): Blob {
+export function buildPdfFromJpegDataUrls(jpegDataUrls: string[], widthPt = 595.28, heightPt = 841.89): Blob {
   const encoder = new TextEncoder();
   const chunks: Uint8Array[] = [];
   const offsets: number[] = [0]; // 1-indexed object offsets

@@ -22,9 +22,10 @@ import {
   Camera,
   Edit3
 } from 'lucide-react';
-import { Product, CompanySettings, OrderDocumentType, ORDER_DOCUMENT_LABELS, WarehouseLocation, Order } from '../../types';
+import { Product, CompanySettings, OrderDocumentType, ORDER_DOCUMENT_LABELS, WarehouseLocation, Order, CustomerCommitment } from '../../types';
 import { searchProducts } from '../../lib/search';
-import { createNewOrder, updateExistingOrder, fetchProductUnitOptions, saveProductUnitOption } from '../../services/db';
+import { createNewOrder, updateExistingOrder, fetchProductUnitOptions, saveProductUnitOption, markCommitmentAsLoaded } from '../../services/db';
+import { decodeCommitmentQrPayload } from '../../lib/commitmentQr';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
 
 interface CartItem {
@@ -45,6 +46,9 @@ interface WarehouseViewProps {
   editingOrder?: Order | null;
   onCancelEditOrder?: () => void;
   onOrderSaved?: (order: Order) => void;
+  commitments?: CustomerCommitment[];
+  pendingCommitmentToLoad?: CustomerCommitment | null;
+  onCommitmentLoaded?: () => void;
 }
 
 const DRAFT_STORAGE_KEY = 'magazzino_active_draft_v1';
@@ -85,6 +89,9 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   editingOrder = null,
   onCancelEditOrder,
   onOrderSaved,
+  commitments = [],
+  pendingCommitmentToLoad = null,
+  onCommitmentLoaded,
 }) => {
   const initialDraft = useMemo(() => loadSavedDraft(), []);
 
@@ -148,6 +155,13 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   const [submittedOrderNumber, setSubmittedOrderNumber] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showScannerModal, setShowScannerModal] = useState(false);
+  const [loadedCommitmentBanner, setLoadedCommitmentBanner] = useState<{
+    number: string;
+    customer: string;
+    installer?: string | null;
+    category: 'STANDARD' | 'VELUX';
+    count: number;
+  } | null>(null);
 
   // Dedicated Mobile & Tablet Touch Quick Quantity Pad Modal
   const [editingItem, setEditingItem] = useState<CartItem | null>(null);
@@ -155,6 +169,97 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   const [keypadFreshOpen, setKeypadFreshOpen] = useState<boolean>(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Helper to inject all items and metadata from a Customer Commitment (via QR scan or list click)
+  const applyCommitmentToOrder = React.useCallback(
+    (commitmentData: {
+      id?: string;
+      commitment_number: string;
+      customer_name: string;
+      category: 'STANDARD' | 'VELUX';
+      installer_name?: string | null;
+      items: {
+        product_id?: string | null;
+        product_code: string;
+        product_description: string;
+        unit_of_measure: string;
+        quantity: number;
+      }[];
+    }) => {
+      triggerHaptic();
+      setDocumentType(prev => prev || 'DDT');
+
+      const formattedRef = `${commitmentData.customer_name} - Impegno N° ${commitmentData.commitment_number}${
+        commitmentData.installer_name ? ` (Inst. ${commitmentData.installer_name})` : ''
+      }`;
+      setCustomerReference(prev => {
+        if (!prev.trim()) return formattedRef;
+        if (prev.includes(commitmentData.commitment_number)) return prev;
+        return `${prev} · Impegno N° ${commitmentData.commitment_number}`;
+      });
+
+      setCart(prevCart => {
+        const nextCart = [...prevCart];
+        for (const cItem of commitmentData.items) {
+          const matchedCatalog = products.find(
+            p => p.code.toLowerCase() === cItem.product_code.toLowerCase()
+          );
+          const resolvedProduct: Product = matchedCatalog || {
+            id: cItem.product_id || `imp-${cItem.product_code}-${crypto.randomUUID()}`,
+            code: cItem.product_code,
+            description: cItem.product_description,
+            unit_of_measure: cItem.unit_of_measure || 'PZ',
+            alternative_code: null,
+            created_at: '',
+            updated_at: '',
+          };
+
+          const existingIdx = nextCart.findIndex(
+            row => row.product?.code.toLowerCase() === resolvedProduct.code.toLowerCase()
+          );
+          if (existingIdx > -1) {
+            nextCart[existingIdx] = {
+              ...nextCart[existingIdx],
+              quantity: Number(
+                (nextCart[existingIdx].quantity + (Number(cItem.quantity) || 1)).toFixed(3)
+              ),
+            };
+          } else {
+            nextCart.push({
+              id: resolvedProduct.code,
+              product: resolvedProduct,
+              quantity: Number(cItem.quantity) || 1,
+              unitOfMeasure: cItem.unit_of_measure || resolvedProduct.unit_of_measure || 'PZ',
+            });
+          }
+        }
+        return nextCart;
+      });
+
+      setLoadedCommitmentBanner({
+        number: commitmentData.commitment_number,
+        customer: commitmentData.customer_name,
+        installer: commitmentData.installer_name,
+        category: commitmentData.category,
+        count: commitmentData.items.length,
+      });
+
+      if (commitmentData.id) {
+        void markCommitmentAsLoaded(commitmentData.id);
+      }
+    },
+    [products]
+  );
+
+  // If the warehouse operator clicked "Carica nell'Ordine" from the Impegni Clienti view
+  React.useEffect(() => {
+    if (pendingCommitmentToLoad) {
+      applyCommitmentToOrder(pendingCommitmentToLoad);
+      if (onCommitmentLoaded) {
+        onCommitmentLoaded();
+      }
+    }
+  }, [pendingCommitmentToLoad, applyCommitmentToOrder, onCommitmentLoaded]);
 
   // Persist active draft automatically so phone lock / refresh never loses a load in progress
   React.useEffect(() => {
@@ -368,10 +473,28 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     setShowDescriptionEditor(false);
   };
 
-  // Handle scanned barcode / QR code
+  // Handle scanned barcode / QR code (Supports both single product QR/EAN and Customer Commitment SAGGIN_IMP| QR)
   const handleBarcodeScanned = (decodedText: string) => {
     triggerHaptic();
     const cleanText = decodedText.trim();
+
+    // 0. Check if scanned QR is a Customer Commitment (Impegno Cliente / Velux)
+    const decodedCommitment = decodeCommitmentQrPayload(cleanText);
+    if (decodedCommitment) {
+      const matchedStoredCommitment = commitments.find(
+        c =>
+          c.id === decodedCommitment.id ||
+          c.commitment_number.toLowerCase() === decodedCommitment.commitment_number.toLowerCase()
+      );
+      if (matchedStoredCommitment) {
+        applyCommitmentToOrder(matchedStoredCommitment);
+      } else {
+        applyCommitmentToOrder(decodedCommitment);
+      }
+      setSearchQuery('');
+      return;
+    }
+
     // 1. Try exact code match
     let matched = products.find(p => p.code.toLowerCase() === cleanText.toLowerCase());
     // 2. Try alternative code (barcode/EAN) match
@@ -416,6 +539,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
         setCart([]);
         setCustomerReference('');
         setDocumentType(null);
+        setLoadedCommitmentBanner(null);
         if (onOrderSaved) {
           onOrderSaved(updated);
         }
@@ -432,6 +556,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
         setCart([]);
         setCustomerReference('');
         setDocumentType(null);
+        setLoadedCommitmentBanner(null);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Errore durante il salvataggio dell'ordine";
@@ -447,6 +572,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     setCustomerReference('');
     setDocumentType(null);
     setSearchQuery('');
+    setLoadedCommitmentBanner(null);
   };
 
   // ------------------------------------------------------------------------
@@ -498,6 +624,51 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   return (
     <div className="min-h-[calc(100dvh-6rem)] flex flex-col justify-between pb-28 sm:pb-32">
       <div className="max-w-4xl mx-auto w-full space-y-3.5 sm:space-y-4">
+        {/* BANNER IMPEGNO CLIENTE / VELUX SCANSIONATO E CARICATO NELL'ORDINE */}
+        {loadedCommitmentBanner && (
+          <div className="bg-emerald-50 border-2 border-emerald-500 rounded-2xl p-4 flex items-start sm:items-center justify-between gap-3 shadow-md">
+            <div className="flex items-center gap-3">
+              <div
+                className={`w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 font-black text-[10px] ${
+                  loadedCommitmentBanner.category === 'VELUX' ? 'bg-[#e30613]' : 'bg-emerald-600'
+                }`}
+              >
+                {loadedCommitmentBanner.category === 'VELUX' ? (
+                  'VELUX'
+                ) : (
+                  <CheckCircle2 className="w-5 h-5" />
+                )}
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-mono font-black uppercase tracking-wider bg-emerald-600 text-white px-2 py-0.5 rounded">
+                    IMPEGNO N° {loadedCommitmentBanner.number} INSERITO
+                  </span>
+                  <span className="font-extrabold text-slate-900 text-sm sm:text-base">
+                    {loadedCommitmentBanner.customer}
+                  </span>
+                  {loadedCommitmentBanner.installer && (
+                    <span className="text-xs font-bold text-[#e30613] bg-red-100 px-2 py-0.5 rounded">
+                      Inst: {loadedCommitmentBanner.installer}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Inseriti automaticamente <strong>{loadedCommitmentBanner.count} articoli</strong>{' '}
+                  dall&apos;etichetta QR impegno. Puoi aggiungere altra merce o inviare l&apos;ordine.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLoadedCommitmentBanner(null)}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
         {/* BANNER MODIFICA / INTEGRAZIONE COMMESSA ESISTENTE */}
         {editingOrder && (
           <div className="bg-amber-500/10 border-2 border-amber-500 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md animate-in fade-in duration-200">

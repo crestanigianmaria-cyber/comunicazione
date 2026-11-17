@@ -93,3 +93,42 @@ export interface SupabaseConfig {
   anonKey: string;
   isConnected: boolean;
 }
+
+export type CommitmentCategory = 'STANDARD' | 'VELUX';
+
+export type CommitmentStatus = 'ATTIVO' | 'CARICATO';
+
+export interface CommitmentItem {
+  id: string;
+  product_id: string | null;
+  product_code: string;
+  product_description: string;
+  unit_of_measure: string;
+  alternative_code?: string | null;
+  quantity: number;
+}
+
+export interface CustomerCommitment {
+  id: string;
+  commitment_number: string;
+  customer_name: string;
+  category: CommitmentCategory;
+  installer_name: string | null;
+  notes?: string | null;
+  status: CommitmentStatus;
+  created_at: string;
+  updated_at: string;
+  items: CommitmentItem[];
+}
+
+export type AppView =
+  | 'magazzino'
+  | 'magazzino_impegni'
+  | 'magazzino_storico'
+  | 'ufficio_dashboard'
+  | 'ufficio_impegni'
+  | 'ufficio_storico'
+  | 'ufficio_cestino'
+  | 'ufficio_catalogo'
+  | 'ufficio_impostazioni';
+

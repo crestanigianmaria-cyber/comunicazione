@@ -1,4 +1,16 @@
-import { CompanySettings, Order, OrderItem, OrderStatus, Product, ExcelImportRow, UserRole } from '../types';
+import {
+  CompanySettings,
+  Order,
+  OrderItem,
+  OrderStatus,
+  Product,
+  ExcelImportRow,
+  UserRole,
+  CustomerCommitment,
+  CommitmentItem,
+  CommitmentCategory,
+  CommitmentStatus,
+} from '../types';
 import { INITIAL_PRODUCTS } from '../data/initialCatalog';
 import { getSupabaseClient } from '../lib/supabase';
 import { playOrderNotificationChime } from '../lib/audio';
@@ -9,6 +21,8 @@ const STORAGE_KEY_ORDERS = 'magazzino_orders_v1';
 const STORAGE_KEY_ORDER_SEQ = 'magazzino_order_sequence_v1';
 const STORAGE_KEY_PENDING = 'magazzino_pending_orders_v1';
 const STORAGE_KEY_SETTINGS = 'magazzino_company_settings_v1';
+const STORAGE_KEY_COMMITMENTS = 'magazzino_commitments_v1';
+const COMMITMENT_DB_PREFIX = '__SAGGIN_IMP_V1__';
 
 // Clear legacy bloated localStorage products entry to eliminate quota errors
 try {
@@ -20,6 +34,7 @@ try {
 // In-memory cache for ultra-fast, zero-latency synchronous access during typing/searching
 let cachedProducts: Product[] | null = null;
 let cachedOrders: Order[] | null = null;
+let cachedCommitments: CustomerCommitment[] | null = null;
 
 // Cross-tab / cross-window real-time synchronization channel
 const broadcastChannel = typeof BroadcastChannel !== 'undefined'
@@ -28,9 +43,11 @@ const broadcastChannel = typeof BroadcastChannel !== 'undefined'
 
 type OrderListener = (orders: Order[], newOrderEvent?: Order) => void;
 type CatalogListener = (products: Product[]) => void;
+type CommitmentListener = (commitments: CustomerCommitment[]) => void;
 
 const orderListeners = new Set<OrderListener>();
 const catalogListeners = new Set<CatalogListener>();
+const commitmentListeners = new Set<CommitmentListener>();
 
 // Default company settings
 const DEFAULT_COMPANY_SETTINGS: CompanySettings = {
@@ -60,6 +77,9 @@ if (broadcastChannel) {
     } else if (type === 'ORDER_UPDATED') {
       const orders = getLocalOrders();
       orderListeners.forEach(listener => listener(orders));
+    } else if (type === 'COMMITMENTS_UPDATED') {
+      const commitments = getLocalCommitments();
+      commitmentListeners.forEach(listener => listener(commitments));
     } else if (type === 'CATALOG_UPDATED') {
       const prods = await idbGetAllProducts();
       cachedProducts = prods;
@@ -179,6 +199,87 @@ function saveLocalPendingOrders(orders: Order[]): void {
     console.error('Error saving pending orders:', err);
   }
 }
+
+function getLocalCommitments(): CustomerCommitment[] {
+  if (cachedCommitments !== null) {
+    return cachedCommitments;
+  }
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_COMMITMENTS);
+    if (raw) {
+      cachedCommitments = JSON.parse(raw);
+      return cachedCommitments || [];
+    }
+  } catch (err) {
+    console.warn('Reading commitments from localStorage:', err);
+  }
+  return [];
+}
+
+function saveLocalCommitments(commitments: CustomerCommitment[]): void {
+  cachedCommitments = commitments;
+  try {
+    localStorage.setItem(STORAGE_KEY_COMMITMENTS, JSON.stringify(commitments));
+  } catch (err) {
+    console.warn('Error saving commitments to localStorage:', err);
+  }
+}
+
+interface CommitmentHeaderMeta {
+  n: string; // commitment_number
+  c: string; // customer_name
+  cat: CommitmentCategory; // 'STANDARD' | 'VELUX'
+  inst?: string | null; // installer_name
+  notes?: string | null; // notes
+  st?: CommitmentStatus; // 'ATTIVO' | 'CARICATO'
+}
+
+function isCommitmentOrderRow(row: any): boolean {
+  return typeof row?.customer_reference === 'string' && row.customer_reference.startsWith(COMMITMENT_DB_PREFIX);
+}
+
+function encodeCommitmentHeaderMeta(meta: CommitmentHeaderMeta): string {
+  return COMMITMENT_DB_PREFIX + JSON.stringify(meta);
+}
+
+function parseCommitmentFromOrderRow(row: any): CustomerCommitment | null {
+  if (!isCommitmentOrderRow(row)) return null;
+  if (row.archived_at) return null; // Soft-deleted commitment
+
+  try {
+    const rawJson = String(row.customer_reference).slice(COMMITMENT_DB_PREFIX.length);
+    const meta = JSON.parse(rawJson) as CommitmentHeaderMeta;
+    const rawItems = Array.isArray(row.items) ? row.items : [];
+    const items: CommitmentItem[] = rawItems.map((it: any) => ({
+      id: it.id || crypto.randomUUID(),
+      product_id: it.product_id || null,
+      product_code: it.product_code_snapshot || '',
+      product_description: it.product_description_snapshot || it.manual_description || '',
+      unit_of_measure: it.unit_of_measure_snapshot || 'PZ',
+      quantity: Number(it.quantity) || 1,
+    }));
+
+    const status: CommitmentStatus =
+      row.status === 'COMPLETATO' || meta.st === 'CARICATO' ? 'CARICATO' : 'ATTIVO';
+
+    return {
+      id: row.id,
+      commitment_number: meta.n || row.order_number || 'IMP',
+      customer_name: meta.c || 'Cliente',
+      category: meta.cat === 'VELUX' ? 'VELUX' : 'STANDARD',
+      installer_name: meta.inst || null,
+      notes: meta.notes || null,
+      status,
+      items,
+      created_at: row.created_at || new Date().toISOString(),
+      updated_at: row.updated_at || row.created_at || new Date().toISOString(),
+    };
+  } catch (err) {
+    console.warn('Failed to parse commitment row:', err);
+    return null;
+  }
+}
+
 
 // --------------------------------------------------------------------------
 // CATALOG OPERATIONS (Backed by IndexedDB with in-memory caching)
@@ -976,8 +1077,10 @@ export function subscribeToOrders(callback: OrderListener): () => void {
           'postgres_changes',
           { event: '*', schema: 'public', table: 'orders' },
           (payload) => {
-            const insertedId = (payload.new as { id?: string } | null)?.id;
-            if (payload.eventType === 'INSERT' && insertedId) {
+            const newRow = payload.new as { id?: string; customer_reference?: string } | null;
+            const insertedId = newRow?.id;
+            const isCommitment = isCommitmentOrderRow(newRow);
+            if (payload.eventType === 'INSERT' && insertedId && !isCommitment) {
               pendingInsertedOrderId = insertedId;
               playOrderNotificationChime();
             }
@@ -1046,6 +1149,298 @@ export function subscribeToCatalog(callback: CatalogListener): () => void {
   return () => {
     catalogListeners.delete(callback);
   };
+}
+
+// --------------------------------------------------------------------------
+// IMPEGNI CLIENTI & VELUX OPERATIONS
+// --------------------------------------------------------------------------
+
+export async function fetchCommitments(forceRefresh = false): Promise<CustomerCommitment[]> {
+  if (forceRefresh && getSupabaseClient()) {
+    await fetchOrders(true);
+  }
+  const list = getLocalCommitments();
+  return [...list].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+}
+
+export function subscribeToCommitments(callback: CommitmentListener): () => void {
+  commitmentListeners.add(callback);
+  return () => {
+    commitmentListeners.delete(callback);
+  };
+}
+
+export async function createCustomerCommitment(input: {
+  commitment_number: string;
+  customer_name: string;
+  category: CommitmentCategory;
+  installer_name?: string | null;
+  notes?: string | null;
+  items: {
+    id?: string;
+    product_id?: string | null;
+    product_code: string;
+    product_description: string;
+    unit_of_measure: string;
+    quantity: number;
+  }[];
+}): Promise<CustomerCommitment> {
+  if (!input.customer_name.trim()) {
+    throw new Error('Inserisci il nome del cliente.');
+  }
+  if (!input.commitment_number.trim()) {
+    throw new Error("Inserisci il numero di impegno cliente.");
+  }
+  if (!input.items || input.items.length === 0) {
+    throw new Error("Aggiungi almeno un articolo all'impegno cliente.");
+  }
+
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const formattedItems: CommitmentItem[] = input.items.map(it => ({
+    id: it.id || crypto.randomUUID(),
+    product_id: it.product_id || null,
+    product_code: (it.product_code || 'ART').trim(),
+    product_description: (it.product_description || '').trim(),
+    unit_of_measure: (it.unit_of_measure || 'PZ').trim().toUpperCase(),
+    quantity: Number(it.quantity) || 1,
+  }));
+
+  const newCommitment: CustomerCommitment = {
+    id,
+    commitment_number: input.commitment_number.trim(),
+    customer_name: input.customer_name.trim(),
+    category: input.category,
+    installer_name: input.installer_name?.trim() || null,
+    notes: input.notes?.trim() || null,
+    status: 'ATTIVO',
+    items: formattedItems,
+    created_at: now,
+    updated_at: now,
+  };
+
+  const current = getLocalCommitments();
+  const updated = [newCommitment, ...current];
+  saveLocalCommitments(updated);
+  commitmentListeners.forEach(l => l(updated));
+  broadcastChannel?.postMessage({ type: 'COMMITMENTS_UPDATED' });
+
+  const supabase = getSupabaseClient();
+  const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+
+  if (supabase && isOnline) {
+    try {
+      const encodedRef = encodeCommitmentHeaderMeta({
+        n: newCommitment.commitment_number,
+        c: newCommitment.customer_name,
+        cat: newCommitment.category,
+        inst: newCommitment.installer_name,
+        notes: newCommitment.notes,
+        st: newCommitment.status,
+      });
+
+      const { data: dbRow, error: headerErr } = await supabase
+        .from('orders')
+        .insert({
+          id: newCommitment.id,
+          order_number: '',
+          customer_reference: encodedRef,
+          document_type: 'DDT',
+          warehouse_location: 'MAGAZZINO',
+          status: 'IN_PREPARAZIONE',
+          created_at: now,
+          updated_at: now,
+        })
+        .select()
+        .single();
+
+      if (!headerErr && dbRow) {
+        const dbItems = formattedItems.map(it => ({
+          id: it.id,
+          order_id: dbRow.id,
+          product_id: it.product_id,
+          line_type: 'PRODUCT',
+          manual_description: null,
+          product_code_snapshot: it.product_code,
+          product_description_snapshot: it.product_description,
+          unit_of_measure_snapshot: it.unit_of_measure,
+          alternative_code_snapshot: null,
+          quantity: it.quantity,
+          created_at: now,
+        }));
+        await supabase.from('order_items').insert(dbItems);
+      } else if (headerErr) {
+        console.warn('[Commitments] Supabase insert notice:', headerErr);
+      }
+    } catch (err) {
+      console.warn('[Commitments] Cloud sync error:', err);
+    }
+  }
+
+  return newCommitment;
+}
+
+export async function updateCustomerCommitment(
+  id: string,
+  input: {
+    commitment_number: string;
+    customer_name: string;
+    category: CommitmentCategory;
+    installer_name?: string | null;
+    notes?: string | null;
+    status?: CommitmentStatus;
+    items: {
+      id?: string;
+      product_id?: string | null;
+      product_code: string;
+      product_description: string;
+      unit_of_measure: string;
+      quantity: number;
+    }[];
+  }
+): Promise<CustomerCommitment> {
+  const current = getLocalCommitments();
+  const idx = current.findIndex(c => c.id === id);
+  if (idx === -1) {
+    throw new Error('Impegno cliente non trovato.');
+  }
+
+  const existing = current[idx];
+  const now = new Date().toISOString();
+  const formattedItems: CommitmentItem[] = input.items.map(it => ({
+    id: crypto.randomUUID(),
+    product_id: it.product_id || null,
+    product_code: (it.product_code || 'ART').trim(),
+    product_description: (it.product_description || '').trim(),
+    unit_of_measure: (it.unit_of_measure || 'PZ').trim().toUpperCase(),
+    quantity: Number(it.quantity) || 1,
+  }));
+
+  const updatedCommitment: CustomerCommitment = {
+    ...existing,
+    commitment_number: input.commitment_number.trim(),
+    customer_name: input.customer_name.trim(),
+    category: input.category,
+    installer_name: input.installer_name?.trim() || null,
+    notes: input.notes?.trim() || null,
+    status: input.status || existing.status,
+    items: formattedItems,
+    updated_at: now,
+  };
+
+  const nextList = [...current];
+  nextList[idx] = updatedCommitment;
+  saveLocalCommitments(nextList);
+  commitmentListeners.forEach(l => l(nextList));
+  broadcastChannel?.postMessage({ type: 'COMMITMENTS_UPDATED' });
+
+  const supabase = getSupabaseClient();
+  const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+
+  if (supabase && isOnline) {
+    try {
+      const encodedRef = encodeCommitmentHeaderMeta({
+        n: updatedCommitment.commitment_number,
+        c: updatedCommitment.customer_name,
+        cat: updatedCommitment.category,
+        inst: updatedCommitment.installer_name,
+        notes: updatedCommitment.notes,
+        st: updatedCommitment.status,
+      });
+
+      await supabase
+        .from('orders')
+        .update({
+          customer_reference: encodedRef,
+          status: updatedCommitment.status === 'CARICATO' ? 'COMPLETATO' : 'IN_PREPARAZIONE',
+          updated_at: now,
+        })
+        .eq('id', id);
+
+      await supabase.from('order_items').delete().eq('order_id', id);
+
+      const dbItems = formattedItems.map(it => ({
+        id: it.id,
+        order_id: id,
+        product_id: it.product_id,
+        line_type: 'PRODUCT',
+        manual_description: null,
+        product_code_snapshot: it.product_code,
+        product_description_snapshot: it.product_description,
+        unit_of_measure_snapshot: it.unit_of_measure,
+        alternative_code_snapshot: null,
+        quantity: it.quantity,
+        created_at: now,
+      }));
+      await supabase.from('order_items').insert(dbItems);
+    } catch (err) {
+      console.warn('[Commitments] Cloud update error:', err);
+    }
+  }
+
+  return updatedCommitment;
+}
+
+export async function markCommitmentAsLoaded(id: string): Promise<void> {
+  const current = getLocalCommitments();
+  const target = current.find(c => c.id === id);
+  if (!target) return;
+
+  const now = new Date().toISOString();
+  const updatedCommitment: CustomerCommitment = {
+    ...target,
+    status: 'CARICATO',
+    updated_at: now,
+  };
+
+  const nextList = current.map(c => (c.id === id ? updatedCommitment : c));
+  saveLocalCommitments(nextList);
+  commitmentListeners.forEach(l => l(nextList));
+  broadcastChannel?.postMessage({ type: 'COMMITMENTS_UPDATED' });
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const encodedRef = encodeCommitmentHeaderMeta({
+        n: updatedCommitment.commitment_number,
+        c: updatedCommitment.customer_name,
+        cat: updatedCommitment.category,
+        inst: updatedCommitment.installer_name,
+        notes: updatedCommitment.notes,
+        st: 'CARICATO',
+      });
+      await supabase
+        .from('orders')
+        .update({
+          customer_reference: encodedRef,
+          status: 'COMPLETATO',
+          updated_at: now,
+        })
+        .eq('id', id);
+    } catch (err) {
+      console.warn('[Commitments] Could not mark commitment loaded in cloud:', err);
+    }
+  }
+}
+
+export async function deleteCustomerCommitment(id: string): Promise<void> {
+  const current = getLocalCommitments().filter(c => c.id !== id);
+  saveLocalCommitments(current);
+  commitmentListeners.forEach(l => l(current));
+  broadcastChannel?.postMessage({ type: 'COMMITMENTS_UPDATED' });
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const now = new Date().toISOString();
+      await supabase
+        .from('orders')
+        .update({ archived_at: now, updated_at: now })
+        .eq('id', id);
+    } catch (err) {
+      console.warn('[Commitments] Cloud delete notice:', err);
+    }
+  }
 }
 
 // --------------------------------------------------------------------------

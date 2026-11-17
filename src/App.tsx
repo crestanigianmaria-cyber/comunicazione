@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { UserRole, Order, Product, CompanySettings } from './types';
+import { UserRole, Order, Product, CompanySettings, CustomerCommitment } from './types';
 import {
   fetchProducts,
   fetchOrders,
+  fetchCommitments,
   subscribeToOrders,
+  subscribeToCommitments,
   subscribeToCatalog,
   getCompanySettings,
   getAuthenticatedRole,
@@ -17,11 +19,12 @@ import { LoginModal } from './components/auth/LoginModal';
 import { WarehouseView } from './components/warehouse/WarehouseView';
 import { OfficeDashboard } from './components/office/OfficeDashboard';
 import { OfficeCatalogView } from './components/office/OfficeCatalogView';
+import { CommitmentsView } from './components/office/CommitmentsView';
 import { SettingsModal } from './components/office/SettingsModal';
 import { ExcelImportModal } from './components/office/ExcelImportModal';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 
-type ActiveView = 'magazzino' | 'magazzino_storico' | 'ufficio_dashboard' | 'ufficio_storico' | 'ufficio_cestino' | 'ufficio_catalogo' | 'ufficio_impostazioni';
+type ActiveView = 'magazzino' | 'magazzino_impegni' | 'magazzino_storico' | 'ufficio_dashboard' | 'ufficio_impegni' | 'ufficio_storico' | 'ufficio_cestino' | 'ufficio_catalogo' | 'ufficio_impostazioni';
 
 export default function App() {
   const { isOnline } = useOnlineStatus();
@@ -50,6 +53,7 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [isProductsLoading, setIsProductsLoading] = useState(true);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [commitments, setCommitments] = useState<CustomerCommitment[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings>(() => getCompanySettings());
 
   // Real-time new order alert banner
@@ -59,6 +63,7 @@ export default function App() {
   );
   const notifiedOrderIds = useRef<Set<string>>(new Set());
   const newOrdersCount = currentRole === 'ufficio' ? orders.filter(order => order.status === 'NUOVO' && !order.archived_at).length : 0;
+  const activeCommitmentsCount = commitments.filter(c => c.status === 'ATTIVO').length;
 
   // Badge numerico sull'icona PWA, se il browser/sistema operativo lo supporta.
   useEffect(() => {
@@ -79,6 +84,8 @@ export default function App() {
 
   // Active order being edited/appended in WarehouseView
   const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  // Commitment selected from Warehouse Commitments view to load into order
+  const [pendingCommitmentToLoad, setPendingCommitmentToLoad] = useState<CustomerCommitment | null>(null);
 
   // Load shared data only after a valid Supabase session has been restored.
   useEffect(() => {
@@ -106,7 +113,15 @@ export default function App() {
           console.error('[Orders] Initial load failed:', err);
         });
 
-      await Promise.all([productsTask, ordersTask]);
+      const commitmentsTask = fetchCommitments()
+        .then((loadedCommitments) => {
+          if (isMounted) setCommitments(loadedCommitments);
+        })
+        .catch((err) => {
+          console.error('[Commitments] Initial load failed:', err);
+        });
+
+      await Promise.all([productsTask, ordersTask, commitmentsTask]);
     }
 
     loadData();
@@ -140,6 +155,11 @@ export default function App() {
       }
     });
 
+    // Subscribe to live commitment updates
+    const unsubCommitments = subscribeToCommitments((updatedCommitments) => {
+      setCommitments(updatedCommitments);
+    });
+
     // Subscribe to live catalog updates
     const unsubCatalog = subscribeToCatalog((updatedProducts) => {
       setProducts(updatedProducts);
@@ -155,6 +175,11 @@ export default function App() {
             if (isMounted) setOrders(fresh);
           })
           .catch(() => {});
+        void fetchCommitments(true)
+          .then((freshCommitments) => {
+            if (isMounted) setCommitments(freshCommitments);
+          })
+          .catch(() => {});
       }, 30000);
     }
 
@@ -162,6 +187,7 @@ export default function App() {
       isMounted = false;
       if (safetyPollTimer) clearInterval(safetyPollTimer);
       unsubOrders();
+      unsubCommitments();
       unsubCatalog();
     };
   }, [currentRole]);
@@ -170,7 +196,7 @@ export default function App() {
   useEffect(() => {
     if (currentRole === 'magazzino') {
       setActiveView('magazzino');
-    } else if (currentRole === 'ufficio' && (activeView === 'magazzino' || activeView === 'magazzino_storico')) {
+    } else if (currentRole === 'ufficio' && (activeView === 'magazzino' || activeView === 'magazzino_impegni' || activeView === 'magazzino_storico')) {
       setActiveView('ufficio_dashboard');
     }
   }, [currentRole]);
@@ -252,6 +278,7 @@ export default function App() {
         notificationPermission={notificationPermission}
         onEnableNotifications={handleEnableNotifications}
         newOrdersCount={newOrdersCount}
+        activeCommitmentsCount={activeCommitmentsCount}
       />
 
       {/* Main View Area */}
@@ -267,6 +294,26 @@ export default function App() {
             editingOrder={editingOrder}
             onCancelEditOrder={() => setEditingOrder(null)}
             onOrderSaved={() => setEditingOrder(null)}
+            commitments={commitments}
+            pendingCommitmentToLoad={pendingCommitmentToLoad}
+            onCommitmentLoaded={() => setPendingCommitmentToLoad(null)}
+          />
+        )}
+
+        {/* INTERFACCIA MAGAZZINO: SOLA LETTURA IMPEGNI CLIENTI & VELUX */}
+        {activeView === 'magazzino_impegni' && (
+          <CommitmentsView
+            commitments={commitments}
+            products={products}
+            readOnly={true}
+            onRefreshCommitments={async () => {
+              const refreshed = await fetchCommitments(true);
+              setCommitments(refreshed);
+            }}
+            onLoadCommitmentIntoOrder={(commitment) => {
+              setPendingCommitmentToLoad(commitment);
+              setActiveView('magazzino');
+            }}
           />
         )}
 
@@ -304,6 +351,19 @@ export default function App() {
             onEditOrder={(order) => {
               setEditingOrder(order);
               setActiveView('magazzino');
+            }}
+          />
+        )}
+
+        {/* INTERFACCIA UFFICIO: IMPEGNI CLIENTI & SEZIONE VELUX */}
+        {activeView === 'ufficio_impegni' && (
+          <CommitmentsView
+            commitments={commitments}
+            products={products}
+            readOnly={false}
+            onRefreshCommitments={async () => {
+              const refreshed = await fetchCommitments(true);
+              setCommitments(refreshed);
             }}
           />
         )}
