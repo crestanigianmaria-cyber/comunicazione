@@ -1,7 +1,13 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import { Printer, Download, X, QrCode, Tag, Check, Copy } from 'lucide-react';
+import { Printer, Download, X, QrCode, Tag, Check, Copy, FileDown } from 'lucide-react';
 import { Product, CompanySettings } from '../../types';
+import {
+  downloadQrSheetsAsPdf,
+  printQrSheetsDirectly,
+  loadSagginLogo,
+  QrSheetPresetId,
+} from '../../lib/qrSheetGenerator';
 
 interface ProductQrModalProps {
   product: Product | null;
@@ -15,38 +21,118 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
   onClose,
 }) => {
   const [dataUrl, setDataUrl] = useState<string>('');
-  const [format, setFormat] = useState<'label' | 'shelf' | 'minimal'>('shelf');
+  const [presetId, setPresetId] = useState<QrSheetPresetId>('qr_3x3_20');
+  const [copiesCount, setCopiesCount] = useState<number>(1);
+  const [showLogoInQr, setShowLogoInQr] = useState<boolean>(true);
   const [copiedCode, setCopiedCode] = useState(false);
-  const printContainerRef = useRef<HTMLDivElement>(null);
+  const [isBusy, setIsBusy] = useState(false);
 
   useEffect(() => {
     if (!product) return;
-    // Generate QR code data containing the unique product code
-    // The warehouse camera directly decodes this string into the search input!
-    QRCode.toDataURL(product.code, {
-      width: 400,
-      margin: 2,
-      color: {
-        dark: '#000000',
-        light: '#ffffff',
-      },
-      errorCorrectionLevel: 'M',
-    })
-      .then(url => setDataUrl(url))
-      .catch(err => console.error('QR generation error:', err));
-  }, [product]);
+    let isMounted = true;
+
+    const renderSingleQrPreview = async () => {
+      try {
+        const canvas = document.createElement('canvas');
+        await QRCode.toCanvas(canvas, product.code, {
+          width: 440,
+          margin: 1,
+          errorCorrectionLevel: showLogoInQr ? 'H' : 'M',
+          color: {
+            dark: '#000000',
+            light: '#ffffff',
+          },
+        });
+
+        if (showLogoInQr) {
+          const logoImg = await loadSagginLogo();
+          if (logoImg) {
+            const ctx = canvas.getContext('2d')!;
+            const w = canvas.width;
+            const badgeW = Math.round(w * 0.26);
+            const badgeH = Math.round(w * 0.16);
+            const bx = Math.round((w - badgeW) / 2);
+            const by = Math.round((w - badgeH) / 2);
+
+            ctx.save();
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = '#dc2626';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.roundRect(bx - 4, by - 4, badgeW + 8, badgeH + 8, 8);
+            ctx.fill();
+            ctx.stroke();
+            ctx.drawImage(logoImg, bx, by, badgeW, badgeH);
+            ctx.restore();
+          }
+        }
+
+        if (isMounted) {
+          setDataUrl(canvas.toDataURL('image/png'));
+        }
+      } catch (err) {
+        console.error('QR generation error:', err);
+      }
+    };
+
+    void renderSingleQrPreview();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [product, showLogoInQr]);
 
   if (!product) return null;
 
-  const handlePrint = () => {
-    window.print();
+  const getRepeatedProducts = (): Product[] => {
+    return Array.from({ length: Math.max(1, copiesCount) }, () => product);
   };
 
-  const handleDownload = () => {
+  const handlePrintA4 = async () => {
+    if (isBusy) return;
+    setIsBusy(true);
+    try {
+      await printQrSheetsDirectly(getRepeatedProducts(), {
+        presetId,
+        showHeaderLogo: true,
+        showLogoInQrCenter: showLogoInQr,
+        showUnitBadge: true,
+        showCutLines: true,
+        darkHeaderStyle: true,
+        companyName: companySettings.companyName || 'SAGGIN GUGLIELMO S.R.L.',
+      });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    if (isBusy) return;
+    setIsBusy(true);
+    try {
+      await downloadQrSheetsAsPdf(
+        getRepeatedProducts(),
+        {
+          presetId,
+          showHeaderLogo: true,
+          showLogoInQrCenter: showLogoInQr,
+          showUnitBadge: true,
+          showCutLines: true,
+          darkHeaderStyle: true,
+          companyName: companySettings.companyName || 'SAGGIN GUGLIELMO S.R.L.',
+        },
+        `QR_${product.code}_A4.pdf`
+      );
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleDownloadPng = () => {
     if (!dataUrl) return;
     const link = document.createElement('a');
     link.href = dataUrl;
-    link.download = `QR_${product.code}_${product.description.slice(0, 15).replace(/\s+/g, '_')}.png`;
+    link.download = `QR_${product.code}_${product.description.slice(0, 20).replace(/\s+/g, '_')}.png`;
     link.click();
   };
 
@@ -58,9 +144,9 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 select-none">
-      <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden border border-slate-200 flex flex-col max-h-[92vh]">
+      <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden border border-slate-200 flex flex-col max-h-[94vh]">
         {/* Top corporate accent */}
-        <div className="h-1 w-full bg-red-600" />
+        <div className="h-1.5 w-full bg-red-600" />
 
         {/* Header */}
         <div className="p-4 sm:p-5 bg-[#0b0f19] text-white flex items-center justify-between border-b border-slate-800">
@@ -70,10 +156,10 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
             </div>
             <div>
               <h3 className="text-sm sm:text-base font-extrabold text-white">
-                Stampa Etichetta QR Code Articolo
+                Etichetta QR Code Articolo · {product.code}
               </h3>
               <p className="text-[11px] text-slate-400">
-                Inquadrabile istantaneamente dalla fotocamera del terminale magazzino
+                Nome completo ad alta leggibilità e guide di taglio per taglierina
               </p>
             </div>
           </div>
@@ -87,126 +173,156 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
 
         {/* Body */}
         <div className="p-5 overflow-y-auto space-y-4">
-          {/* Format Selector */}
-          <div className="flex items-center justify-between bg-slate-50 p-1.5 rounded-xl border border-slate-200 text-xs font-bold">
-            <button
-              type="button"
-              onClick={() => setFormat('shelf')}
-              className={`flex-1 py-1.5 rounded-lg transition ${
-                format === 'shelf' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
-              }`}
-            >
-              Cartellino Scaffale
-            </button>
-            <button
-              type="button"
-              onClick={() => setFormat('label')}
-              className={`flex-1 py-1.5 rounded-lg transition ${
-                format === 'label' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
-              }`}
-            >
-              Etichetta Bancale
-            </button>
-            <button
-              type="button"
-              onClick={() => setFormat('minimal')}
-              className={`flex-1 py-1.5 rounded-lg transition ${
-                format === 'minimal' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500 hover:text-slate-900'
-              }`}
-            >
-              Solo QR Code
-            </button>
+          {/* Size Selector */}
+          <div className="grid grid-cols-3 gap-1.5 bg-slate-100 p-1.5 rounded-xl border border-slate-200 text-xs font-bold">
+            {(
+              [
+                { id: 'qr_3x3_20', label: 'QR 3×3 cm' },
+                { id: 'qr_3.5x3.5_16', label: 'QR 3.5×3.5 cm' },
+                { id: 'qr_4x4_12', label: 'QR 4×4 cm' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setPresetId(opt.id)}
+                className={`py-1.5 rounded-lg transition cursor-pointer ${
+                  presetId === opt.id
+                    ? 'bg-slate-900 text-white shadow-2xs'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
           </div>
 
-          {/* Printable Label Preview Card */}
-          <div className="flex justify-center p-2 bg-slate-100/70 rounded-xl border border-slate-200">
-            <div
-              ref={printContainerRef}
-              id="printable-qr-label"
-              className="bg-white p-4 rounded-xl border-2 border-dashed border-slate-300 w-full max-w-[340px] shadow-sm text-center flex flex-col items-center"
-            >
-              {/* Company Wordmark */}
-              <div className="flex items-center gap-1.5 mb-2">
-                <img src="/saggin-logo.png" alt="Saggin" className="h-5 w-auto object-contain" />
-                <span className="font-extrabold text-[11px] text-slate-900 tracking-tight">
-                  {companySettings.companyName || 'SAGGIN'}
+          {/* Copies Selector (1, 4, or full A4 sheet) */}
+          <div className="flex items-center justify-between gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200 text-xs">
+            <span className="font-bold text-slate-700">Quantità sul foglio A4:</span>
+            <div className="flex items-center gap-1.5">
+              {[
+                { count: 1, label: '1 Etichetta' },
+                { count: 4, label: '4 Etichette' },
+                { count: 12, label: '12 Etichette' },
+                { count: 20, label: 'Foglio Pieno (20)' },
+              ].map((c) => (
+                <button
+                  key={c.count}
+                  type="button"
+                  onClick={() => setCopiesCount(c.count)}
+                  className={`px-2.5 py-1 rounded-md font-bold text-[11px] transition cursor-pointer ${
+                    copiesCount === c.count
+                      ? 'bg-red-600 text-white'
+                      : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Printable Label Preview Card (Full Uncut Description) */}
+          <div className="flex justify-center p-3 bg-slate-100/70 rounded-xl border border-slate-200">
+            <div className="bg-white rounded-xl border-2 border-dashed border-slate-400 w-full max-w-[320px] shadow-sm text-center overflow-hidden flex flex-col items-center">
+              {/* Top Dark Corporate Bar */}
+              <div className="w-full bg-[#0b0f19] text-white px-3 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="bg-white rounded px-1 py-0.5">
+                    <img
+                      src="/saggin-logo.png"
+                      alt="Saggin"
+                      className="h-3.5 w-auto object-contain"
+                    />
+                  </div>
+                  <span className="font-mono font-black text-sm tracking-tight text-white">
+                    {product.code}
+                  </span>
+                </div>
+                <span className="font-mono font-extrabold text-xs text-red-400">
+                  {product.unit_of_measure}
                 </span>
               </div>
 
               {/* QR Image */}
-              <div className="p-2 bg-white rounded-lg border border-slate-200 mb-2">
+              <div className="p-3 bg-white flex items-center justify-center">
                 {dataUrl ? (
-                  <img src={dataUrl} alt={`QR ${product.code}`} className="w-40 h-40 object-contain mx-auto" />
+                  <img
+                    src={dataUrl}
+                    alt={`QR ${product.code}`}
+                    className="w-40 h-40 object-contain mx-auto"
+                  />
                 ) : (
                   <div className="w-40 h-40 bg-slate-100 animate-pulse rounded" />
                 )}
               </div>
 
-              {/* Code */}
-              <div className="font-mono text-base font-black text-slate-900 tracking-wide bg-slate-100 px-3 py-1 rounded-md mb-1.5">
-                {product.code}
-              </div>
-
-              {/* Description */}
-              {format !== 'minimal' && (
-                <div className="text-xs font-bold text-slate-900 leading-snug line-clamp-2 px-1 mb-1">
+              {/* Full Uncut Description */}
+              <div className="w-full px-3 pb-3 pt-1 border-t border-slate-100">
+                <p className="text-xs font-extrabold text-slate-900 leading-snug break-words">
                   {product.description}
-                </div>
-              )}
-
-              {/* Unit & Alternative */}
-              {format === 'shelf' && (
-                <div className="flex items-center justify-center gap-2 text-[10px] text-slate-500 font-mono mt-1 pt-1 border-t border-slate-100 w-full">
-                  <span>UM: <strong>{product.unit_of_measure}</strong></span>
-                  {product.alternative_code && <span>Alt: {product.alternative_code}</span>}
-                </div>
-              )}
+                </p>
+              </div>
             </div>
           </div>
 
-          {/* Quick info */}
+          {/* Toggle Logo in QR + Quick Copy */}
           <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Tag className="w-4 h-4 text-red-600 shrink-0" />
-              <span>Codice Articolo: <strong className="font-mono text-slate-900">{product.code}</strong></span>
-            </div>
+            <label className="inline-flex items-center gap-2 cursor-pointer font-bold text-slate-800">
+              <input
+                type="checkbox"
+                checked={showLogoInQr}
+                onChange={(e) => setShowLogoInQr(e.target.checked)}
+                className="w-4 h-4 accent-red-600 rounded"
+              />
+              <span>Includi Logo Saggin al centro del QR</span>
+            </label>
+
             <button
               type="button"
               onClick={handleCopyCode}
               className="text-[11px] font-bold text-slate-700 hover:text-red-600 flex items-center gap-1"
             >
-              {copiedCode ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copiedCode ? 'Copiato!' : 'Copia'}</span>
+              {copiedCode ? (
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
+              ) : (
+                <Copy className="w-3.5 h-3.5" />
+              )}
+              <span>{copiedCode ? 'Copiato!' : `Copia ${product.code}`}</span>
             </button>
           </div>
         </div>
 
         {/* Footer actions */}
-        <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
+        <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
           <button
             type="button"
-            onClick={onClose}
-            className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 text-xs font-bold hover:bg-slate-100 transition"
+            onClick={handleDownloadPng}
+            className="px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
           >
-            Chiudi
+            <Download className="w-3.5 h-3.5" />
+            <span>PNG Singolo</span>
           </button>
 
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleDownload}
-              className="px-3.5 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-800 text-xs font-bold flex items-center gap-1.5 shadow-2xs transition"
+              onClick={handleDownloadPdf}
+              disabled={isBusy}
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black flex items-center gap-1.5 shadow-sm transition cursor-pointer"
             >
-              <Download className="w-3.5 h-3.5 text-slate-600" />
-              <span>Salva Immagine PNG</span>
+              <FileDown className="w-3.5 h-3.5" />
+              <span>Scarica PDF A4</span>
             </button>
             <button
               type="button"
-              onClick={handlePrint}
-              className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-md shadow-red-600/20 active:scale-95 transition"
+              onClick={handlePrintA4}
+              disabled={isBusy}
+              className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-red-600/20 active:scale-95 transition cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Stampa Etichetta</span>
+              <span>Stampa A4</span>
             </button>
           </div>
         </div>

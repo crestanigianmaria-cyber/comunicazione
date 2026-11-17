@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Search,
   Upload,
@@ -12,7 +12,7 @@ import {
   CheckSquare,
   Square,
   Printer,
-  Sparkles
+  Plus
 } from 'lucide-react';
 import { Product, CompanySettings } from '../../types';
 import { searchProducts } from '../../lib/search';
@@ -38,63 +38,139 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
   const [selectedProductCodes, setSelectedProductCodes] = useState<Set<string>>(new Set());
   const [showBatchModal, setShowBatchModal] = useState(false);
 
+  // Range selector inputs ("Da riga X a riga Y")
+  const [rangeStart, setRangeStart] = useState<string>('1');
+  const [rangeEnd, setRangeEnd] = useState<string>('20');
+
+  // Drag & Shift+Click selection refs
+  const lastClickedIdxRef = useRef<number | null>(null);
+  const isDraggingRef = useRef<boolean>(false);
+  const dragModeRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    const stopDrag = () => {
+      isDraggingRef.current = false;
+    };
+    window.addEventListener('mouseup', stopDrag);
+    return () => window.removeEventListener('mouseup', stopDrag);
+  }, []);
+
   const filteredProducts = useMemo(() => {
-    return searchProducts(products, searchQuery, 500);
+    return searchProducts(products, searchQuery, 1000);
   }, [products, searchQuery]);
 
-  // Quick preset selections
+  // Additive quick preset selections
   const handleSelectQuickFilter = (type: 'acciai' | 'mapei' | 'all-filtered' | 'clear') => {
     if (type === 'clear') {
       setSelectedProductCodes(new Set());
       return;
     }
     if (type === 'all-filtered') {
-      setSelectedProductCodes(new Set(filteredProducts.map(p => p.code)));
+      setSelectedProductCodes((prev) => {
+        const next = new Set(prev);
+        filteredProducts.forEach((p) => next.add(p.code));
+        return next;
+      });
       return;
     }
     if (type === 'acciai') {
-      const matched = products.filter(p => {
-        const text = (p.description + ' ' + p.code + ' ' + (p.alternative_code || '')).toLowerCase();
+      const matched = products.filter((p) => {
+        const desc = p.description.toLowerCase();
+        const code = p.code.toLowerCase();
         return (
-          text.includes('acc') ||
-          text.includes('tubo') ||
-          text.includes('curva') ||
-          text.includes('ferro') ||
-          text.includes('rete elettrosaldata') ||
-          text.includes('trave') ||
-          text.includes('scatolare') ||
-          text.includes('tondo')
+          code.includes('acc') ||
+          desc.includes('acc') ||
+          desc.includes('tubo') ||
+          desc.includes('curva') ||
+          desc.includes('ferro') ||
+          desc.includes('rete elettrosaldata') ||
+          desc.includes('trave') ||
+          desc.includes('scatolare') ||
+          desc.includes('tondo')
         );
       });
-      setSelectedProductCodes(new Set(matched.map(p => p.code)));
+      setSelectedProductCodes((prev) => {
+        const next = new Set(prev);
+        matched.forEach((p) => next.add(p.code));
+        return next;
+      });
       return;
     }
     if (type === 'mapei') {
-      const matched = products.filter(p => {
+      const matched = products.filter((p) => {
         const text = (p.description + ' ' + p.code + ' ' + (p.alternative_code || '')).toLowerCase();
         return text.includes('mapei') || text.includes('keraflex');
       });
-      setSelectedProductCodes(new Set(matched.map(p => p.code)));
+      setSelectedProductCodes((prev) => {
+        const next = new Set(prev);
+        matched.forEach((p) => next.add(p.code));
+        return next;
+      });
       return;
     }
   };
 
-  const toggleSelectProduct = (code: string) => {
-    setSelectedProductCodes(prev => {
+  // Select contiguous block by row number (1-indexed)
+  const handleSelectRange = () => {
+    const s = Math.max(1, parseInt(rangeStart, 10) || 1) - 1;
+    const e = Math.min(filteredProducts.length, parseInt(rangeEnd, 10) || filteredProducts.length) - 1;
+    if (s > e) return;
+    setSelectedProductCodes((prev) => {
       const next = new Set(prev);
-      if (next.has(code)) next.delete(code);
-      else next.add(code);
+      for (let i = s; i <= e; i++) {
+        if (filteredProducts[i]) next.add(filteredProducts[i].code);
+      }
       return next;
     });
   };
 
-  const selectedProductsList = useMemo(() => {
-    if (selectedProductCodes.size === 0) return [];
-    const codeMap = new Map(products.map(p => [p.code, p]));
-    return Array.from(selectedProductCodes)
-      .map(code => codeMap.get(code))
-      .filter((p): p is Product => Boolean(p));
-  }, [products, selectedProductCodes]);
+  // Mouse Down on row: supports Shift+Click block selection and Click+Drag start
+  const handleRowMouseDown = (index: number, code: string, e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return;
+    e.preventDefault();
+
+    const currentlySelected = selectedProductCodes.has(code);
+    const nextState = !currentlySelected;
+
+    if (e.shiftKey && lastClickedIdxRef.current !== null) {
+      const start = Math.min(lastClickedIdxRef.current, index);
+      const end = Math.max(lastClickedIdxRef.current, index);
+      setSelectedProductCodes((prev) => {
+        const next = new Set(prev);
+        for (let i = start; i <= end; i++) {
+          const item = filteredProducts[i];
+          if (item) {
+            if (nextState) next.add(item.code);
+            else next.delete(item.code);
+          }
+        }
+        return next;
+      });
+    } else {
+      isDraggingRef.current = true;
+      dragModeRef.current = nextState;
+      setSelectedProductCodes((prev) => {
+        const next = new Set(prev);
+        if (nextState) next.add(code);
+        else next.delete(code);
+        return next;
+      });
+    }
+
+    lastClickedIdxRef.current = index;
+  };
+
+  // Mouse Enter while holding left click ("uno sopra l'altro" drag selection)
+  const handleRowMouseEnter = (index: number, code: string) => {
+    if (!isDraggingRef.current) return;
+    setSelectedProductCodes((prev) => {
+      const next = new Set(prev);
+      if (dragModeRef.current) next.add(code);
+      else next.delete(code);
+      return next;
+    });
+    lastClickedIdxRef.current = index;
+  };
 
   const handleClearConfirm = async () => {
     await clearAllProducts();
@@ -116,7 +192,7 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
             </span>
           </div>
           <p className="text-xs text-slate-500">
-            <strong className="font-mono text-slate-800">{products.length}</strong> referenze a catalogo · Condivise in tempo reale con i terminali di magazzino e deposito.
+            <strong className="font-mono text-slate-800">{products.length}</strong> referenze a catalogo · Trascina col mouse sulle righe o usa Shift+Click per selezionare blocchi di articoli da stampare in QR.
           </p>
         </div>
 
@@ -125,16 +201,16 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
             <button
               type="button"
               onClick={() => setShowBatchModal(true)}
-              className={`px-3.5 py-2 rounded-lg text-xs font-black flex items-center gap-2 transition shadow-sm ${
+              className={`px-4 py-2 rounded-lg text-xs font-black flex items-center gap-2 transition shadow-sm cursor-pointer ${
                 selectedProductCodes.size > 0
                   ? 'bg-slate-900 text-white hover:bg-slate-800 ring-2 ring-red-600'
-                  : 'bg-white hover:bg-slate-100 border border-slate-300 text-slate-800'
+                  : 'bg-slate-900 text-white hover:bg-slate-800'
               }`}
-              title="Apri il generatore di etichette QR A4 con logo e dimensioni personalizzabili"
+              title="Apri l'impaginatore A4 QR Code con taglio per taglierina"
             >
-              <Printer className="w-4 h-4 text-red-600 stroke-[2.5]" />
+              <Printer className="w-4 h-4 text-red-500 stroke-[2.5]" />
               <span>
-                Stampa QR Multipli {selectedProductCodes.size > 0 ? `(${selectedProductCodes.size})` : ''}
+                Impaginatore QR A4 {selectedProductCodes.size > 0 ? `(${selectedProductCodes.size})` : ''}
               </span>
             </button>
           )}
@@ -217,87 +293,132 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
 
       {/* Catalog Search, Multi-Select Toolbar & Table Card */}
       <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
-        {/* Search Input Bar + Quick Selection Buttons */}
-        <div className="p-3 sm:p-4 border-b border-slate-200 bg-slate-50/50 flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div className="relative flex-1 max-w-md">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-              <Search className="w-4 h-4" />
+        {/* Search Input Bar + Quick Additive Selection Buttons */}
+        <div className="p-3 sm:p-4 border-b border-slate-200 bg-slate-50/70 space-y-3">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="relative flex-1 max-w-md">
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                <Search className="w-4 h-4" />
+              </div>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder='Cerca es. "acc", "curva", "tubo", "mapei" o codice...'
+                className="w-full h-10 pl-10 pr-8 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900 transition"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Cerca per codice articolo, descrizione o codice alternativo..."
-              className="w-full h-10 pl-10 pr-8 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-900 transition"
-            />
-            {searchQuery && (
+
+            {/* Quick Additive Group Selection Chips */}
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 mr-1">
+                Aggiungi Rapido:
+              </span>
               <button
                 type="button"
-                onClick={() => setSearchQuery('')}
-                className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 hover:text-slate-600"
+                onClick={() => handleSelectQuickFilter('acciai')}
+                className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 font-bold text-slate-800 text-[11px] flex items-center gap-1 transition cursor-pointer"
+                title="Aggiungi tutti gli acciai (tubi, curve, travi, tondi c.a., reti)"
               >
-                <X className="w-3.5 h-3.5" />
+                <Plus className="w-3 h-3 text-red-600 stroke-[3]" />
+                <span>Acciai / Tubi / Curve</span>
               </button>
-            )}
+              <button
+                type="button"
+                onClick={() => handleSelectQuickFilter('mapei')}
+                className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 font-bold text-slate-800 text-[11px] flex items-center gap-1 transition cursor-pointer"
+                title="Aggiungi tutti gli articoli Mapei"
+              >
+                <Plus className="w-3 h-3 text-red-600 stroke-[3]" />
+                <span>Articoli Mapei</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectQuickFilter('all-filtered')}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-bold text-[11px] flex items-center gap-1 transition cursor-pointer"
+              >
+                <Plus className="w-3 h-3 text-emerald-400 stroke-[3]" />
+                <span>Aggiungi Filtrati ({filteredProducts.length})</span>
+              </button>
+              {selectedProductCodes.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectQuickFilter('clear')}
+                  className="px-2.5 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 font-mono font-black text-[11px] transition cursor-pointer"
+                >
+                  Azzera ({selectedProductCodes.size})
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Quick Filter Selection Chips & Actions */}
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 mr-1">
-              Seleziona Rapido:
-            </span>
-            <button
-              type="button"
-              onClick={() => handleSelectQuickFilter('acciai')}
-              className="px-2.5 py-1 rounded-md bg-white hover:bg-slate-100 border border-slate-300 font-bold text-slate-700 text-[11px] transition"
-              title="Seleziona tutti gli acciai (tubi, curve, travi, tondi c.a., reti)"
-            >
-              🔩 Tutti Acciai
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSelectQuickFilter('mapei')}
-              className="px-2.5 py-1 rounded-md bg-white hover:bg-slate-100 border border-slate-300 font-bold text-slate-700 text-[11px] transition"
-              title="Seleziona tutti gli articoli Mapei"
-            >
-              🏗️ Tutti Mapei
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSelectQuickFilter('all-filtered')}
-              className="px-2.5 py-1 rounded-md bg-white hover:bg-slate-100 border border-slate-300 font-bold text-slate-700 text-[11px] transition"
-            >
-              Seleziona Filtrati ({filteredProducts.length})
-            </button>
-            {selectedProductCodes.size > 0 && (
+          {/* Row Interval Selector + Drag Hint */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-bold text-slate-600">
+                Seleziona Blocco Consecutivo da riga #:
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={filteredProducts.length || 1}
+                value={rangeStart}
+                onChange={(e) => setRangeStart(e.target.value)}
+                className="w-16 h-7 px-2 bg-white border border-slate-300 rounded-md font-mono font-bold text-center text-slate-900"
+              />
+              <span className="text-[11px] font-bold text-slate-600">a riga #:</span>
+              <input
+                type="number"
+                min={1}
+                max={filteredProducts.length || 1}
+                value={rangeEnd}
+                onChange={(e) => setRangeEnd(e.target.value)}
+                className="w-16 h-7 px-2 bg-white border border-slate-300 rounded-md font-mono font-bold text-center text-slate-900"
+              />
               <button
                 type="button"
-                onClick={() => handleSelectQuickFilter('clear')}
-                className="px-2 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-700 font-mono font-black text-[11px] transition"
+                onClick={handleSelectRange}
+                className="px-3 h-7 rounded-md bg-slate-800 hover:bg-slate-700 text-white font-bold text-[11px] transition cursor-pointer"
               >
-                Deseleziona ({selectedProductCodes.size})
+                Seleziona Intervallo
               </button>
-            )}
+            </div>
+
+            <span className="text-[11px] text-slate-500 font-medium">
+              💡 <strong>Suggerimento</strong>: tieni premuto il mouse e trascina dall'alto in basso (o usa <strong>Shift + Click</strong>) per selezionare più righe una sopra l'altra.
+            </span>
           </div>
         </div>
 
-        {/* Selected Banner (Sticky trigger for print) */}
+        {/* Selected Sticky Action Bar */}
         {selectedProductCodes.size > 0 && (
-          <div className="px-4 py-2.5 bg-slate-900 text-white flex items-center justify-between gap-3 text-xs animate-in fade-in">
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-bold">
-                {selectedProductCodes.size} {selectedProductCodes.size === 1 ? 'articolo selezionato' : 'articoli selezionati'} per la stampa
+          <div className="px-4 py-3 bg-[#0b0f19] text-white flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-extrabold text-sm">
+                {selectedProductCodes.size}{' '}
+                {selectedProductCodes.size === 1
+                  ? 'articolo pronto in coda di stampa'
+                  : 'articoli pronti in coda di stampa'}
               </span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => setShowBatchModal(true)}
-                className="px-3.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 font-black text-white text-xs flex items-center gap-1.5 transition shadow-xs"
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 font-black text-white text-xs flex items-center gap-2 transition shadow-md shadow-red-600/25 cursor-pointer"
               >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Apri Impaginatore A4 ({selectedProductCodes.size})</span>
+                <Printer className="w-4 h-4" />
+                <span>APRI IMPAGINATORE A4 & SALVA PDF ({selectedProductCodes.size})</span>
               </button>
             </div>
           </div>
@@ -341,7 +462,7 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
                   </th>
                   <th className="py-3 px-3 w-12 text-center">#</th>
                   <th className="py-3 px-4 w-40">Codice Articolo (Col. A)</th>
-                  <th className="py-3 px-4">Descrizione Materiale (Col. B)</th>
+                  <th className="py-3 px-4">Descrizione Materiale Completa (Col. B)</th>
                   <th className="py-3 px-4 w-40">Cod. Alternativo (Col. N)</th>
                   <th className="py-3 px-4 w-20 text-center">U.M.</th>
                   <th className="py-3 px-4 w-28 text-center">Etichetta QR</th>
@@ -353,29 +474,32 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
                   return (
                     <tr
                       key={p.code}
-                      onClick={() => toggleSelectProduct(p.code)}
+                      onMouseDown={(e) => handleRowMouseDown(idx, p.code, e)}
+                      onMouseEnter={() => handleRowMouseEnter(idx, p.code)}
                       className={`cursor-pointer transition select-none ${
                         isSelected
-                          ? 'bg-red-50/70 hover:bg-red-50'
+                          ? 'bg-red-50/80 hover:bg-red-100/60'
                           : 'hover:bg-slate-50/90'
                       }`}
                     >
-                      <td
-                        className="py-2.5 px-3 text-center"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelectProduct(p.code)}
-                          className="w-4 h-4 accent-red-600 rounded cursor-pointer"
-                        />
+                      <td className="py-2.5 px-3 text-center">
+                        {isSelected ? (
+                          <CheckSquare className="w-4 h-4 text-red-600 mx-auto" />
+                        ) : (
+                          <Square className="w-4 h-4 text-slate-300 mx-auto" />
+                        )}
                       </td>
-                      <td className="py-2.5 px-3 text-center text-slate-400 font-mono">
+                      <td className="py-2.5 px-3 text-center text-slate-400 font-mono font-bold">
                         {idx + 1}
                       </td>
                       <td className="py-2.5 px-4">
-                        <span className="font-mono font-black text-xs bg-slate-900 text-white px-2.5 py-0.5 rounded">
+                        <span
+                          className={`font-mono font-black text-xs px-2.5 py-0.5 rounded ${
+                            isSelected
+                              ? 'bg-red-600 text-white'
+                              : 'bg-slate-900 text-white'
+                          }`}
+                        >
                           {p.code}
                         </span>
                       </td>
@@ -397,7 +521,7 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
                         <button
                           type="button"
                           onClick={() => setSelectedQrProduct(p)}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-red-600 hover:text-white text-slate-700 font-mono text-[11px] font-bold border border-slate-200 transition"
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-red-600 hover:text-white text-slate-700 font-mono text-[11px] font-bold border border-slate-200 transition cursor-pointer"
                           title={`Genera e stampa etichetta singola per ${p.code}`}
                         >
                           <QrCode className="w-3.5 h-3.5" />
@@ -435,9 +559,9 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
       {/* Batch QR Multi-Label Print & Layout Modal */}
       {showBatchModal && (
         <BatchQrPrintModal
-          products={
-            selectedProductsList.length > 0 ? selectedProductsList : filteredProducts
-          }
+          allCatalogProducts={products}
+          selectedCodes={selectedProductCodes}
+          onUpdateSelectedCodes={setSelectedProductCodes}
           companySettings={
             companySettings || {
               companyName: 'SAGGIN',
@@ -450,10 +574,8 @@ export const OfficeCatalogView: React.FC<OfficeCatalogViewProps> = ({
             }
           }
           onClose={() => setShowBatchModal(false)}
-          onClearSelection={() => setSelectedProductCodes(new Set())}
         />
       )}
     </div>
   );
 };
-
