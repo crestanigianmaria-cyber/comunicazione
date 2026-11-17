@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Camera, X, RefreshCw, AlertCircle, Volume2 } from 'lucide-react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Camera, X, RefreshCw, AlertCircle, ImageUp } from 'lucide-react';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 
 interface BarcodeScannerModalProps {
   isOpen: boolean;
@@ -16,44 +16,84 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
   const [scannerError, setScannerError] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(true);
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasScannedRef = useRef(false);
+
+  // Keep latest callbacks in refs so the camera listener never uses a stale closure
+  const onScanSuccessRef = useRef(onScanSuccess);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onScanSuccessRef.current = onScanSuccess;
+    onCloseRef.current = onClose;
+  }, [onScanSuccess, onClose]);
+
   const readerElementId = 'saggin-barcode-reader';
 
   useEffect(() => {
     if (!isOpen) return;
 
     let isMounted = true;
+    hasScannedRef.current = false;
     setIsStarting(true);
     setScannerError(null);
 
     const timer = setTimeout(async () => {
       try {
-        const html5QrCode = new Html5Qrcode(readerElementId);
+        const html5QrCode = new Html5Qrcode(readerElementId, {
+          useBarCodeDetectorIfSupported: true,
+          verbose: false,
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.QR_CODE,
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39,
+          ],
+        });
         scannerRef.current = html5QrCode;
 
         const config = {
-          fps: 15,
-          qrbox: { width: 260, height: 260 },
-          aspectRatio: 1.0,
+          fps: 20,
+          qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+            const minEdge = Math.min(viewfinderWidth || 280, viewfinderHeight || 280);
+            const boxSize = Math.max(150, Math.floor(minEdge * 0.82));
+            return { width: boxSize, height: boxSize };
+          },
+          disableFlip: false,
         };
 
         await html5QrCode.start(
           { facingMode: 'environment' },
           config,
           (decodedText) => {
-            if (!isMounted) return;
-            // Haptic + Audio confirmation
+            if (!isMounted || hasScannedRef.current) return;
+            const clean = decodedText.trim();
+            if (!clean) return;
+            hasScannedRef.current = true;
+
             if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-              try { navigator.vibrate(60); } catch {}
+              try {
+                navigator.vibrate(70);
+              } catch {
+                // ignore
+              }
             }
-            // Stop scanning and trigger success callback
-            html5QrCode.stop().then(() => {
-              html5QrCode.clear();
-              onScanSuccess(decodedText.trim());
-              onClose();
-            }).catch(() => {
-              onScanSuccess(decodedText.trim());
-              onClose();
-            });
+
+            html5QrCode
+              .stop()
+              .then(() => {
+                try {
+                  html5QrCode.clear();
+                } catch {
+                  // ignore
+                }
+                onScanSuccessRef.current(clean);
+                onCloseRef.current();
+              })
+              .catch(() => {
+                onScanSuccessRef.current(clean);
+                onCloseRef.current();
+              });
           },
           () => {
             // Frame scan failure (quiet)
@@ -66,25 +106,64 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
         const msg = err instanceof Error ? err.message : 'Impossibile accedere alla fotocamera.';
         setScannerError(
           msg.includes('NotAllowedError') || msg.includes('Permission')
-            ? 'Accesso fotocamera negato. Consenti l\'accesso fotocamera dalle impostazioni del browser.'
+            ? "Accesso fotocamera negato. Consenti l'accesso fotocamera dalle impostazioni del browser oppure usa il pulsante qui sotto per scattare/caricare una foto del QR."
             : msg
         );
         setIsStarting(false);
       }
-    }, 150);
+    }, 120);
 
     return () => {
       isMounted = false;
       clearTimeout(timer);
-      if (scannerRef.current) {
-        scannerRef.current
-          .stop()
-          .then(() => scannerRef.current?.clear())
-          .catch(() => {});
-        scannerRef.current = null;
+      const inst = scannerRef.current;
+      scannerRef.current = null;
+      if (inst) {
+        try {
+          if (inst.isScanning) {
+            inst
+              .stop()
+              .then(() => inst.clear())
+              .catch(() => {});
+          } else {
+            inst.clear();
+          }
+        } catch {
+          // ignore
+        }
       }
     };
   }, [isOpen]);
+
+  const handleFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setScannerError(null);
+
+    try {
+      // Stop live stream first if active
+      if (scannerRef.current && scannerRef.current.isScanning) {
+        await scannerRef.current.stop().catch(() => {});
+      }
+      const fileScanner =
+        scannerRef.current ||
+        new Html5Qrcode(readerElementId, {
+          useBarCodeDetectorIfSupported: true,
+          verbose: false,
+        });
+      const decoded = await fileScanner.scanFile(file, false);
+      if (decoded && decoded.trim()) {
+        onScanSuccessRef.current(decoded.trim());
+        onCloseRef.current();
+      }
+    } catch {
+      setScannerError(
+        'Impossibile leggere un QR Code da questa immagine. Avvicina bene l’obiettivo al riquadro QR.'
+      );
+    } finally {
+      if (e.target) e.target.value = '';
+    }
+  };
 
   if (!isOpen) return null;
 
@@ -99,10 +178,10 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
             </div>
             <div>
               <h3 className="text-sm font-extrabold text-white">
-                Scansione Barcode / QR Code
+                Scansione QR Code Articolo o Impegno
               </h3>
               <p className="text-[11px] text-slate-400">
-                Inquadra il codice stampato sull'etichetta
+                Inquadra il codice QR stampato sull'etichetta o sul cartellino impegno
               </p>
             </div>
           </div>
@@ -116,8 +195,8 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
 
         {/* Viewfinder area */}
         <div className="p-4 flex flex-col items-center">
-          <div className="relative w-full aspect-square max-w-[320px] rounded-xl overflow-hidden bg-black border-2 border-red-600/40 flex items-center justify-center">
-            <div id={readerElementId} className="w-full h-full object-cover" />
+          <div className="relative w-full min-h-[280px] max-w-[340px] rounded-xl overflow-hidden bg-black border-2 border-red-600/40">
+            <div id={readerElementId} className="w-full min-h-[280px]" />
 
             {isStarting && (
               <div className="absolute inset-0 bg-[#0b0f19]/90 flex flex-col items-center justify-center gap-3 p-4 text-center">
@@ -134,18 +213,30 @@ export const BarcodeScannerModal: React.FC<BarcodeScannerModalProps> = ({
                 <p className="text-xs font-bold text-red-200 leading-relaxed">
                   {scannerError}
                 </p>
-                <button
-                  onClick={onClose}
-                  className="mt-2 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-bold text-white transition"
-                >
-                  Chiudi e usa la ricerca manuale
-                </button>
               </div>
             )}
           </div>
 
-          <p className="text-[11px] text-slate-400 mt-3 text-center">
-            Supporta codici QR Saggin, EAN-13, EAN-8 e codici a barre standard.
+          {/* Photo / Image File Fallback Button (always works even on desktop or without live stream) */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={handleFileScan}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="mt-3 w-full max-w-[340px] py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-extrabold text-white flex items-center justify-center gap-2 transition cursor-pointer"
+          >
+            <ImageUp className="w-4 h-4 text-red-400" />
+            <span>Scatta Foto / Carica Immagine QR</span>
+          </button>
+
+          <p className="text-[11px] text-slate-400 mt-2.5 text-center">
+            Riconosce automaticamente QR Articoli, QR Impegni Clienti / VELUX e codici EAN.
           </p>
         </div>
 

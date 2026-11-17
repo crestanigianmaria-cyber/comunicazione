@@ -339,7 +339,9 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
 
   // Handle adding product (one-touch add or increment)
   const handleAddProduct = (product: Product) => {
-    if (!documentType) return;
+    if (!documentType) {
+      setDocumentType('DDT');
+    }
     triggerHaptic();
 
     // Track in recent products for 1-tap quick picks
@@ -473,18 +475,19 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     setShowDescriptionEditor(false);
   };
 
-  // Handle scanned barcode / QR code (Supports both single product QR/EAN and Customer Commitment SAGGIN_IMP| QR)
+  // Handle scanned barcode / QR code (Supports both single product QR/EAN and Customer Commitment IMP| / SAGGIN_IMP| QR)
   const handleBarcodeScanned = (decodedText: string) => {
     triggerHaptic();
     const cleanText = decodedText.trim();
+    if (!cleanText) return;
 
     // 0. Check if scanned QR is a Customer Commitment (Impegno Cliente / Velux)
     const decodedCommitment = decodeCommitmentQrPayload(cleanText);
     if (decodedCommitment) {
       const matchedStoredCommitment = commitments.find(
         c =>
-          c.id === decodedCommitment.id ||
-          c.commitment_number.toLowerCase() === decodedCommitment.commitment_number.toLowerCase()
+          (decodedCommitment.id && c.id === decodedCommitment.id) ||
+          c.commitment_number.trim().toLowerCase() === decodedCommitment.commitment_number.trim().toLowerCase()
       );
       if (matchedStoredCommitment) {
         applyCommitmentToOrder(matchedStoredCommitment);
@@ -495,26 +498,46 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       return;
     }
 
-    // 1. Try exact code match
-    let matched = products.find(p => p.code.toLowerCase() === cleanText.toLowerCase());
+    // 0b. Also check if scanned code directly matches a stored Customer Commitment number
+    const directCommitmentMatch = commitments.find(
+      c => c.commitment_number.trim().toLowerCase() === cleanText.toLowerCase()
+    );
+    if (directCommitmentMatch) {
+      applyCommitmentToOrder(directCommitmentMatch);
+      setSearchQuery('');
+      return;
+    }
+
+    // 1. Try exact product code match (ignoring leading/trailing spaces)
+    let matched = products.find(p => p.code.trim().toLowerCase() === cleanText.toLowerCase());
     // 2. Try alternative code (barcode/EAN) match
     if (!matched) {
-      matched = products.find(p => p.alternative_code && p.alternative_code.toLowerCase() === cleanText.toLowerCase());
+      matched = products.find(
+        p => p.alternative_code && p.alternative_code.trim().toLowerCase() === cleanText.toLowerCase()
+      );
     }
     // 3. Try partial code match if length is relevant
-    if (!matched && cleanText.length >= 3) {
-      matched = products.find(p => p.code.toLowerCase().includes(cleanText.toLowerCase()));
+    if (!matched && cleanText.length >= 2) {
+      matched = products.find(p => p.code.trim().toLowerCase() === cleanText.toLowerCase());
+      if (!matched) {
+        const candidates = products.filter(p => p.code.toLowerCase().includes(cleanText.toLowerCase()));
+        if (candidates.length === 1) {
+          matched = candidates[0];
+        }
+      }
     }
 
     if (matched) {
-      // Auto-set default document type to DDT if not set yet
       if (!documentType) {
         setDocumentType('DDT');
       }
       handleAddProduct(matched);
       setSearchQuery('');
     } else {
-      // Set as search query so operator can find closest product
+      if (!documentType) {
+        setDocumentType('DDT');
+      }
+      // Set as search query so operator can see matching products immediately
       setSearchQuery(cleanText);
     }
   };
@@ -907,26 +930,37 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
             <div className="relative flex items-center gap-2">
               <div className="relative flex-1 flex items-center">
                 <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                  <Search className={`w-5 h-5 ${documentType ? 'text-red-600' : 'text-slate-400'}`} />
+                  <Search className="w-5 h-5 text-red-600" />
                 </div>
                 <input
                   ref={searchInputRef}
                   type="text"
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  disabled={isProductsLoading || !documentType}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (!documentType && val.trim()) {
+                      setDocumentType('DDT');
+                    }
+                    // If a commitment QR payload is pasted or scanned directly into the input
+                    if (val.trim().startsWith('IMP|') || val.trim().startsWith('SAGGIN_IMP|')) {
+                      handleBarcodeScanned(val.trim());
+                      return;
+                    }
+                    setSearchQuery(val);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && searchQuery.trim()) {
+                      e.preventDefault();
+                      handleBarcodeScanned(searchQuery.trim());
+                    }
+                  }}
+                  disabled={isProductsLoading}
                   placeholder={
                     isProductsLoading
                       ? 'Sincronizzazione catalogo articoli in corso...'
-                      : !documentType
-                      ? '↑ Seleziona prima il Tipo Documento qui sopra...'
-                      : 'Digita codice, parole chiave (es. "cemento 25") o scansiona...'
+                      : 'Digita codice, parole chiave (es. "cemento 25") o scansiona QR...'
                   }
-                  className={`w-full h-14 pl-12 pr-12 rounded-xl text-sm sm:text-base font-bold transition placeholder:text-slate-400 ${
-                    !documentType
-                      ? 'bg-slate-100 border-2 border-slate-200 text-slate-400 cursor-not-allowed'
-                      : 'bg-slate-50 border-2 border-slate-300 text-slate-900 focus:bg-white focus:outline-none focus:border-slate-900 focus:ring-4 focus:ring-slate-900/10'
-                  }`}
+                  className="w-full h-14 pl-12 pr-12 rounded-xl text-sm sm:text-base font-bold transition placeholder:text-slate-400 bg-slate-50 border-2 border-slate-300 text-slate-900 focus:bg-white focus:outline-none focus:border-slate-900 focus:ring-4 focus:ring-slate-900/10"
                 />
                 {searchQuery && (
                   <button

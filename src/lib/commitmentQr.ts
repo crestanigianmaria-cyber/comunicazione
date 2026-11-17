@@ -2,7 +2,8 @@ import QRCode from 'qrcode';
 import { CustomerCommitment, CommitmentItem, CommitmentCategory } from '../types';
 import { loadSagginLogo, buildPdfFromJpegDataUrls } from './qrSheetGenerator';
 
-const QR_PREFIX = 'SAGGIN_IMP|';
+const QR_PREFIX_COMPACT = 'IMP|';
+const QR_PREFIX_LEGACY = 'SAGGIN_IMP|';
 
 function cleanToken(str: string | null | undefined, maxLen = 80): string {
   if (!str) return '';
@@ -14,34 +15,30 @@ function cleanToken(str: string | null | undefined, maxLen = 80): string {
 }
 
 /**
- * Encodes a CustomerCommitment into a compact, self-contained string for the QR Code.
- * Even if scanned offline in the yard, the QR code itself carries:
- * - Commitment ID
- * - Commitment Number (Numero Impegno)
- * - Customer Name (Cliente)
- * - Category (STANDARD / VELUX)
- * - Installer Name (Piazza / Pauletto / Custom)
- * - All items (code, quantity, unit, description)
+ * Encodes a CustomerCommitment into a compact, low-density string for the QR Code.
+ * Format: IMP|<commitment_number>|<customer_name>|<V/S>|<installer_name>|<code1>~<qty1>~<um1>~<descIfManual>;...
+ * Keeping the payload concise ensures a low QR Version (large, crisp modules) that scans in <0.1s.
  */
 export function encodeCommitmentQrPayload(commitment: CustomerCommitment): string {
   const itemsPart = commitment.items
-    .slice(0, 25) // safety limit for QR density
+    .slice(0, 20)
     .map((it) => {
-      const code = cleanToken(it.product_code, 30);
+      const code = cleanToken(it.product_code, 24);
       const qty = Number(it.quantity) || 1;
-      const um = cleanToken(it.unit_of_measure || 'PZ', 10);
-      const desc = cleanToken(it.product_description, 36);
-      return `${code}~${qty}~${um}~${desc}`;
+      const um = cleanToken(it.unit_of_measure || 'PZ', 8);
+      // Only include description in QR if it's a manual/non-catalog item
+      const isManual = !code || code.toUpperCase() === 'MANUALE';
+      const desc = isManual ? cleanToken(it.product_description, 28) : '';
+      return desc ? `${code}~${qty}~${um}~${desc}` : `${code}~${qty}~${um}`;
     })
     .join(';');
 
   return [
-    'SAGGIN_IMP',
-    cleanToken(commitment.id, 40),
-    cleanToken(commitment.commitment_number, 30),
-    cleanToken(commitment.customer_name, 50),
-    commitment.category === 'VELUX' ? 'VELUX' : 'STANDARD',
-    cleanToken(commitment.installer_name, 40),
+    'IMP',
+    cleanToken(commitment.commitment_number, 24),
+    cleanToken(commitment.customer_name, 36),
+    commitment.category === 'VELUX' ? 'V' : 'S',
+    cleanToken(commitment.installer_name, 24),
     itemsPart,
   ].join('|');
 }
@@ -56,17 +53,55 @@ export interface DecodedCommitmentQr {
 }
 
 /**
- * Checks if a scanned QR string is a Saggin Customer Commitment QR and decodes it.
+ * Checks if a scanned QR string is a Saggin Customer Commitment QR (`IMP|...` or `SAGGIN_IMP|...`) and decodes it.
  */
 export function decodeCommitmentQrPayload(rawText: string): DecodedCommitmentQr | null {
   const trimmed = rawText.trim();
-  if (!trimmed.startsWith(QR_PREFIX)) return null;
+  if (!trimmed.startsWith(QR_PREFIX_COMPACT) && !trimmed.startsWith(QR_PREFIX_LEGACY)) {
+    return null;
+  }
 
   const parts = trimmed.split('|');
-  if (parts.length < 6) return null;
 
-  const [, id, commitment_number, customer_name, categoryRaw, installerRaw, itemsRaw = ''] = parts;
-  const category: CommitmentCategory = categoryRaw === 'VELUX' ? 'VELUX' : 'STANDARD';
+  // Legacy 7-part format: SAGGIN_IMP|id|number|customer|VELUX/STANDARD|installer|items
+  if (trimmed.startsWith(QR_PREFIX_LEGACY)) {
+    if (parts.length < 6) return null;
+    const [, id, commitment_number, customer_name, categoryRaw, installerRaw, itemsRaw = ''] = parts;
+    const category: CommitmentCategory =
+      categoryRaw === 'VELUX' || categoryRaw === 'V' ? 'VELUX' : 'STANDARD';
+    const installer_name = installerRaw?.trim() ? installerRaw.trim() : null;
+
+    const items: CommitmentItem[] = itemsRaw
+      .split(';')
+      .filter(Boolean)
+      .map((token, idx) => {
+        const [code = '', qtyStr = '1', um = 'PZ', desc = ''] = token.split('~');
+        return {
+          id: `imp-item-${idx}-${code}`,
+          product_id: null,
+          product_code: code.trim(),
+          product_description: desc.trim() || code.trim(),
+          unit_of_measure: um.trim() || 'PZ',
+          quantity: parseFloat(qtyStr) || 1,
+        };
+      })
+      .filter((it) => Boolean(it.product_code || it.product_description));
+
+    return {
+      id: id.trim(),
+      commitment_number: commitment_number.trim(),
+      customer_name: customer_name.trim(),
+      category,
+      installer_name,
+      items,
+    };
+  }
+
+  // Compact 6-part format: IMP|number|customer|V/S|installer|items
+  if (parts.length < 5) return null;
+  const [, commitment_number, customer_name, categoryRaw, installerRaw = '', itemsRaw = ''] = parts;
+  const category: CommitmentCategory =
+    categoryRaw === 'V' || categoryRaw === 'VELUX' ? 'VELUX' : 'STANDARD';
   const installer_name = installerRaw?.trim() ? installerRaw.trim() : null;
 
   const items: CommitmentItem[] = itemsRaw
@@ -86,7 +121,7 @@ export function decodeCommitmentQrPayload(rawText: string): DecodedCommitmentQr 
     .filter((it) => Boolean(it.product_code || it.product_description));
 
   return {
-    id: id.trim(),
+    id: '',
     commitment_number: commitment_number.trim(),
     customer_name: customer_name.trim(),
     category,
@@ -273,48 +308,21 @@ export async function renderCommitmentLabelCanvas(
 
   cursorY += infoBoxH + 20;
 
-  // 3. Large High-Resolution QR Code with Embedded VELUX or SAGGIN Logo
+  // 3. Large High-Resolution QR Code (100% pure unobstructed matrix for instant camera scanning)
   const qrPayload = encodeCommitmentQrPayload(commitment);
   const qrSize = 460;
   const qrCanvas = document.createElement('canvas');
   await QRCode.toCanvas(qrCanvas, qrPayload, {
     width: qrSize,
-    margin: 1,
-    errorCorrectionLevel: 'H',
+    margin: 3,
+    errorCorrectionLevel: 'M',
     color: { dark: '#000000', light: '#ffffff' },
   });
 
-  // Draw center badge inside QR Code
-  const qCtx = qrCanvas.getContext('2d')!;
-  if (isVelux) {
-    const bw = 128;
-    const bh = 52;
-    const bx = (qrSize - bw) / 2;
-    const by = (qrSize - bh) / 2;
-    qCtx.fillStyle = '#ffffff';
-    qCtx.beginPath();
-    qCtx.roundRect(bx - 5, by - 5, bw + 10, bh + 10, 8);
-    qCtx.fill();
-    drawVeluxLogo(qCtx, bx, by, bw, bh);
-  } else if (logoImg) {
-    const bw = 118;
-    const bh = 62;
-    const bx = (qrSize - bw) / 2;
-    const by = (qrSize - bh) / 2;
-    qCtx.fillStyle = '#ffffff';
-    qCtx.strokeStyle = '#dc2626';
-    qCtx.lineWidth = 4;
-    qCtx.beginPath();
-    qCtx.roundRect(bx - 5, by - 5, bw + 10, bh + 10, 8);
-    qCtx.fill();
-    qCtx.stroke();
-    qCtx.drawImage(logoImg, bx, by, bw, bh);
-  }
-
   // Draw a self-contained cuttable QR Sticker Frame so even if someone cuts ONLY the QR square,
-  // it clearly shows Nome Cliente + Numero Impegno (+ Installatore)!
+  // it clearly shows Logo (VELUX / Saggin) + Nome Cliente + Numero Impegno (+ Installatore)!
   const stickerW = qrSize + 80;
-  const stickerH = qrSize + 110;
+  const stickerH = qrSize + 114;
   const stickerX = (W - stickerW) / 2;
   const stickerY = cursorY;
 
@@ -329,11 +337,23 @@ export async function renderCommitmentLabelCanvas(
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Top bar inside QR sticker: IMPEGNO N°
+  // Top bar inside QR sticker: VELUX/Saggin Logo + IMPEGNO N°
   ctx.fillStyle = isVelux ? '#e3001b' : '#0f172a';
   ctx.beginPath();
-  ctx.roundRect(stickerX + 6, stickerY + 6, stickerW - 12, 42, 8);
+  ctx.roundRect(stickerX + 6, stickerY + 6, stickerW - 12, 46, 8);
   ctx.fill();
+
+  if (isVelux) {
+    drawVeluxLogo(ctx, stickerX + 16, stickerY + 12, 92, 34);
+  } else if (logoImg) {
+    const sh = 30;
+    const sw = (logoImg.width / logoImg.height) * sh;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.roundRect(stickerX + 14, stickerY + 12, sw + 8, sh + 4, 4);
+    ctx.fill();
+    ctx.drawImage(logoImg, stickerX + 18, stickerY + 14, sw, sh);
+  }
 
   ctx.fillStyle = '#ffffff';
   ctx.font = '900 22px "JetBrains Mono", monospace';
@@ -341,13 +361,13 @@ export async function renderCommitmentLabelCanvas(
   ctx.textBaseline = 'middle';
   ctx.fillText(
     `IMPEGNO N° ${commitment.commitment_number}`,
-    W / 2,
-    stickerY + 27
+    W / 2 + 34,
+    stickerY + 29
   );
 
-  // Draw QR Canvas centered inside the sticker frame
+  // Draw pure QR Canvas centered inside the sticker frame
   const qrX = (W - qrSize) / 2;
-  ctx.drawImage(qrCanvas, qrX, stickerY + 52, qrSize, qrSize);
+  ctx.drawImage(qrCanvas, qrX, stickerY + 56, qrSize, qrSize);
 
   // Bottom bar inside QR sticker: CLIENTE (+ Installatore)
   const bottomLabel = hasInstaller
@@ -357,7 +377,7 @@ export async function renderCommitmentLabelCanvas(
   ctx.font = `900 ${bottomLabel.length > 34 ? 19 : 23}px "Plus Jakarta Sans", Arial, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(bottomLabel, W / 2, stickerY + 52 + qrSize + 28, stickerW - 24);
+  ctx.fillText(bottomLabel, W / 2, stickerY + 56 + qrSize + 28, stickerW - 24);
   ctx.restore();
 
   cursorY += stickerH + 18;

@@ -234,38 +234,18 @@ export async function renderA4SheetToCanvas(
   ctx.restore();
 
   // 2. Pre-generate QR Code images for all items on this page
+  // IMPORTANT: Never draw a logo on top of the QR matrix modules! Short product codes use
+  // Version 1 (21x21) where a center badge destroys format info bits. The Saggin logo is
+  // already prominently displayed in the label header bar right above the QR code.
   const qrImages = await Promise.all(
     pageProducts.map(async (prod) => {
       const qrCanvas = document.createElement('canvas');
-      await QRCode.toCanvas(qrCanvas, prod.code, {
+      await QRCode.toCanvas(qrCanvas, prod.code.trim(), {
         width: Math.round(preset.qrMm * PX_PER_MM),
-        margin: 1,
-        errorCorrectionLevel: options.showLogoInQrCenter ? 'H' : 'M',
+        margin: 3,
+        errorCorrectionLevel: 'M',
         color: { dark: '#000000', light: '#ffffff' },
       });
-
-      // Optionally draw mini Saggin logo badge in the center of the QR code
-      if (options.showLogoInQrCenter && logoImg) {
-        const qCtx = qrCanvas.getContext('2d')!;
-        const w = qrCanvas.width;
-        const badgeW = Math.round(w * 0.26);
-        const badgeH = Math.round(w * 0.16);
-        const bx = Math.round((w - badgeW) / 2);
-        const by = Math.round((w - badgeH) / 2);
-
-        qCtx.save();
-        qCtx.fillStyle = '#ffffff';
-        qCtx.strokeStyle = '#dc2626';
-        qCtx.lineWidth = Math.max(2, Math.round(w * 0.01));
-        qCtx.beginPath();
-        qCtx.roundRect(bx - 3, by - 3, badgeW + 6, badgeH + 6, 6);
-        qCtx.fill();
-        qCtx.stroke();
-
-        qCtx.drawImage(logoImg, bx, by, badgeW, badgeH);
-        qCtx.restore();
-      }
-
       return qrCanvas;
     })
   );

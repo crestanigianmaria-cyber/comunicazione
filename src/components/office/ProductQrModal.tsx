@@ -34,38 +34,15 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
     const renderSingleQrPreview = async () => {
       try {
         const canvas = document.createElement('canvas');
-        await QRCode.toCanvas(canvas, product.code, {
+        await QRCode.toCanvas(canvas, product.code.trim(), {
           width: 440,
-          margin: 1,
-          errorCorrectionLevel: showLogoInQr ? 'H' : 'M',
+          margin: 3,
+          errorCorrectionLevel: 'M',
           color: {
             dark: '#000000',
             light: '#ffffff',
           },
         });
-
-        if (showLogoInQr) {
-          const logoImg = await loadSagginLogo();
-          if (logoImg) {
-            const ctx = canvas.getContext('2d')!;
-            const w = canvas.width;
-            const badgeW = Math.round(w * 0.26);
-            const badgeH = Math.round(w * 0.16);
-            const bx = Math.round((w - badgeW) / 2);
-            const by = Math.round((w - badgeH) / 2);
-
-            ctx.save();
-            ctx.fillStyle = '#ffffff';
-            ctx.strokeStyle = '#dc2626';
-            ctx.lineWidth = 4;
-            ctx.beginPath();
-            ctx.roundRect(bx - 4, by - 4, badgeW + 8, badgeH + 8, 8);
-            ctx.fill();
-            ctx.stroke();
-            ctx.drawImage(logoImg, bx, by, badgeW, badgeH);
-            ctx.restore();
-          }
-        }
 
         if (isMounted) {
           setDataUrl(canvas.toDataURL('image/png'));
@@ -80,7 +57,7 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [product, showLogoInQr]);
+  }, [product]);
 
   if (!product) return null;
 
@@ -94,8 +71,8 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
     try {
       await printQrSheetsDirectly(getRepeatedProducts(), {
         presetId,
-        showHeaderLogo: true,
-        showLogoInQrCenter: showLogoInQr,
+        showHeaderLogo: showLogoInQr,
+        showLogoInQrCenter: false,
         showUnitBadge: true,
         showCutLines: true,
         darkHeaderStyle: true,
