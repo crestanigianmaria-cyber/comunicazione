@@ -2,8 +2,20 @@ import React, { useEffect, useState } from 'react';
 import { WifiOff, RefreshCw, AlertTriangle, X } from 'lucide-react';
 import { useOnlineStatus } from '../../hooks/useOnlineStatus';
 
-export const OfflineBanner: React.FC = () => {
-  const { isOnline, pendingCount, isSyncing, syncMessage, triggerManualSync } = useOnlineStatus();
+export interface OnlineStatusSnapshot {
+  isOnline: boolean;
+  pendingCount: number;
+  isSyncing: boolean;
+  syncMessage: string | null;
+  triggerManualSync: () => Promise<void>;
+}
+
+interface OfflineBannerProps {
+  statusOverride?: OnlineStatusSnapshot;
+}
+
+const OfflineBannerContent: React.FC<{ status: OnlineStatusSnapshot }> = ({ status }) => {
+  const { isOnline, pendingCount, isSyncing, syncMessage, triggerManualSync } = status;
   const [dismissed, setDismissed] = useState(false);
 
   // If the queue changes, surface the alert again. Hiding the banner never
@@ -58,4 +70,16 @@ export const OfflineBanner: React.FC = () => {
       </div>
     </div>
   );
+};
+
+const OfflineBannerWithHook: React.FC = () => {
+  const internalStatus = useOnlineStatus();
+  return <OfflineBannerContent status={internalStatus} />;
+};
+
+export const OfflineBanner: React.FC<OfflineBannerProps> = ({ statusOverride }) => {
+  if (statusOverride) {
+    return <OfflineBannerContent status={statusOverride} />;
+  }
+  return <OfflineBannerWithHook />;
 };

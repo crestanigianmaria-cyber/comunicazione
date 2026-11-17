@@ -38,6 +38,10 @@ export function useOnlineStatus() {
     }
   }, []);
 
+  const refreshPendingCount = useCallback(() => {
+    setPendingCount(getPendingOrdersCount());
+  }, []);
+
   useEffect(() => {
     const updatePending = () => setPendingCount(getPendingOrdersCount());
 
@@ -77,5 +81,6 @@ export function useOnlineStatus() {
     isSyncing,
     syncMessage,
     triggerManualSync: runSync,
+    refreshPendingCount,
   };
 }

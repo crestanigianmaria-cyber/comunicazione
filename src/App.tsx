@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { UserRole, Order, Product, CompanySettings, CustomerCommitment } from './types';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { UserRole, Order, Product, CompanySettings, CustomerCommitment, WarehouseLocation } from './types';
 import {
   fetchProducts,
   fetchOrders,
@@ -17,6 +17,10 @@ import { Header } from './components/common/Header';
 import { OfflineBanner } from './components/common/OfflineBanner';
 import { LoginModal } from './components/auth/LoginModal';
 import { WarehouseView } from './components/warehouse/WarehouseView';
+import { WarehouseAppShell } from './components/warehouse/WarehouseAppShell';
+import { WarehouseHistoryView } from './components/warehouse/WarehouseHistoryView';
+import { WarehouseCommitmentsView } from './components/warehouse/WarehouseCommitmentsView';
+import { ToastProvider } from './components/warehouse/ui/ToastProvider';
 import { OfficeDashboard } from './components/office/OfficeDashboard';
 import { OfficeCatalogView } from './components/office/OfficeCatalogView';
 import { CommitmentsView } from './components/office/CommitmentsView';
@@ -24,10 +28,20 @@ import { SettingsModal } from './components/office/SettingsModal';
 import { ExcelImportModal } from './components/office/ExcelImportModal';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 
-type ActiveView = 'magazzino' | 'magazzino_impegni' | 'magazzino_storico' | 'ufficio_dashboard' | 'ufficio_impegni' | 'ufficio_storico' | 'ufficio_cestino' | 'ufficio_catalogo' | 'ufficio_impostazioni';
+type ActiveView =
+  | 'magazzino'
+  | 'magazzino_impegni'
+  | 'magazzino_storico'
+  | 'ufficio_dashboard'
+  | 'ufficio_impegni'
+  | 'ufficio_storico'
+  | 'ufficio_cestino'
+  | 'ufficio_catalogo'
+  | 'ufficio_impostazioni';
 
 export default function App() {
-  const { isOnline } = useOnlineStatus();
+  const onlineStatus = useOnlineStatus();
+  const { isOnline, refreshPendingCount } = onlineStatus;
 
   // Role authentication state
   const [currentRole, setCurrentRole] = useState<UserRole | null>(null);
@@ -43,11 +57,31 @@ export default function App() {
       .finally(() => {
         if (isMounted) setAuthLoading(false);
       });
-    return () => { isMounted = false; };
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Current active navigation view
   const [activeView, setActiveView] = useState<ActiveView>('magazzino');
+
+  // Shared Warehouse loading location (synced with localStorage & App Shell Header)
+  const [warehouseLocation, setWarehouseLocation] = useState<WarehouseLocation>(() => {
+    try {
+      return (localStorage.getItem('saggin_warehouse_location') as WarehouseLocation) || 'MAGAZZINO';
+    } catch {
+      return 'MAGAZZINO';
+    }
+  });
+
+  const handleWarehouseLocationChange = useCallback((loc: WarehouseLocation) => {
+    setWarehouseLocation(loc);
+    try {
+      localStorage.setItem('saggin_warehouse_location', loc);
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, []);
 
   // Database state
   const [products, setProducts] = useState<Product[]>([]);
@@ -56,19 +90,28 @@ export default function App() {
   const [commitments, setCommitments] = useState<CustomerCommitment[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings>(() => getCompanySettings());
 
+  // Live Warehouse Cart badge stats
+  const [warehouseCartStats, setWarehouseCartStats] = useState({ lines: 0, units: 0 });
+
   // Real-time new order alert banner
   const [newOrderAlert, setNewOrderAlert] = useState<Order | null>(null);
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(() =>
     typeof Notification !== 'undefined' ? Notification.permission : 'denied'
   );
   const notifiedOrderIds = useRef<Set<string>>(new Set());
-  const newOrdersCount = currentRole === 'ufficio' ? orders.filter(order => order.status === 'NUOVO' && !order.archived_at).length : 0;
+  const newOrdersCount =
+    currentRole === 'ufficio'
+      ? orders.filter(order => order.status === 'NUOVO' && !order.archived_at).length
+      : 0;
   const activeCommitmentsCount = commitments.filter(c => c.status === 'ATTIVO').length;
 
   // Badge numerico sull'icona PWA, se il browser/sistema operativo lo supporta.
   useEffect(() => {
     if (currentRole !== 'ufficio' || typeof navigator === 'undefined') return;
-    const badgeNavigator = navigator as Navigator & { setAppBadge?: (count?: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+    const badgeNavigator = navigator as Navigator & {
+      setAppBadge?: (count?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
     if (newOrdersCount > 0 && badgeNavigator.setAppBadge) {
       void badgeNavigator.setAppBadge(newOrdersCount).catch(() => {});
     } else if (badgeNavigator.clearAppBadge) {
@@ -140,7 +183,9 @@ export default function App() {
           Notification.permission === 'granted'
         ) {
           notifiedOrderIds.current.add(orderId);
-          const reference = newOrderEvent.customer_reference ? ` · ${newOrderEvent.customer_reference}` : '';
+          const reference = newOrderEvent.customer_reference
+            ? ` · ${newOrderEvent.customer_reference}`
+            : '';
           const notification = new Notification('Nuovo ordine ricevuto', {
             body: `${newOrderEvent.order_number || 'Nuovo ordine'}${reference}`,
             icon: '/pwa-192x192.png',
@@ -196,7 +241,12 @@ export default function App() {
   useEffect(() => {
     if (currentRole === 'magazzino') {
       setActiveView('magazzino');
-    } else if (currentRole === 'ufficio' && (activeView === 'magazzino' || activeView === 'magazzino_impegni' || activeView === 'magazzino_storico')) {
+    } else if (
+      currentRole === 'ufficio' &&
+      (activeView === 'magazzino' ||
+        activeView === 'magazzino_impegni' ||
+        activeView === 'magazzino_storico')
+    ) {
       setActiveView('ufficio_dashboard');
     }
   }, [currentRole]);
@@ -239,9 +289,13 @@ export default function App() {
   // Wait for Supabase to restore the persisted authentication session.
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-[#0b0f19] flex flex-col items-center justify-center text-white gap-4">
+      <div className="min-h-screen bg-[#0b0f19] wms-grid-bg flex flex-col items-center justify-center text-white gap-4">
         <div className="bg-white rounded-xl px-4 py-2.5 shadow-lg">
-          <img src="/saggin-logo.png" alt="Saggin Guglielmo S.R.L." className="h-9 w-auto object-contain" />
+          <img
+            src="/saggin-logo.png"
+            alt="Saggin Guglielmo S.R.L."
+            className="h-9 w-auto object-contain"
+          />
         </div>
         <div className="flex items-center gap-2.5 text-xs font-bold uppercase tracking-widest text-slate-400">
           <span className="w-2 h-2 rounded-full bg-red-600 animate-ping" />
@@ -257,177 +311,226 @@ export default function App() {
       <LoginModal
         onLoginSuccess={handleLoginSuccess}
         defaultRole={currentRole || 'magazzino'}
+        onCancel={currentRole ? () => setShowRoleModal(false) : undefined}
       />
     );
   }
 
+  // --------------------------------------------------------------------------
+  // PORTALE MAGAZZINO (Dedicated Responsive App Shell & Warehouse Views)
+  // --------------------------------------------------------------------------
+  if (currentRole === 'magazzino') {
+    return (
+      <ToastProvider>
+        <WarehouseAppShell
+          activeView={activeView}
+          onNavigate={view => setActiveView(view)}
+          onLogout={handleLogout}
+          onSwitchRole={handleSwitchRole}
+          companySettings={companySettings}
+          onlineStatus={onlineStatus}
+          warehouseLocation={warehouseLocation}
+          onWarehouseLocationChange={handleWarehouseLocationChange}
+          activeCommitmentsCount={activeCommitmentsCount}
+          cartLinesCount={warehouseCartStats.lines}
+          editingOrder={editingOrder}
+        >
+          {/* Keep WarehouseView mounted across tab switches to preserve search/context */}
+          <div className={activeView === 'magazzino' ? 'block' : 'hidden'}>
+            <WarehouseView
+              products={products}
+              isProductsLoading={isProductsLoading}
+              companySettings={companySettings}
+              isOnline={isOnline}
+              warehouseLocation={warehouseLocation}
+              onWarehouseLocationChange={handleWarehouseLocationChange}
+              editingOrder={editingOrder}
+              onCancelEditOrder={() => setEditingOrder(null)}
+              onOrderSaved={() => setEditingOrder(null)}
+              commitments={commitments}
+              pendingCommitmentToLoad={pendingCommitmentToLoad}
+              onCommitmentLoaded={() => setPendingCommitmentToLoad(null)}
+              onOrdersQueueChanged={refreshPendingCount}
+              onCartStatsChange={setWarehouseCartStats}
+            />
+          </div>
+
+          {activeView === 'magazzino_impegni' && (
+            <WarehouseCommitmentsView
+              commitments={commitments}
+              onRefreshCommitments={async () => {
+                const refreshed = await fetchCommitments(true);
+                setCommitments(refreshed);
+              }}
+              onLoadCommitmentIntoOrder={(commitment) => {
+                setPendingCommitmentToLoad(commitment);
+                setActiveView('magazzino');
+              }}
+            />
+          )}
+
+          {activeView === 'magazzino_storico' && (
+            <WarehouseHistoryView
+              orders={orders}
+              companySettings={companySettings}
+              onEditOrder={(order) => {
+                if (order.status === 'COMPLETATO' || order.archived_at) return;
+                setEditingOrder(order);
+                setActiveView('magazzino');
+              }}
+            />
+          )}
+        </WarehouseAppShell>
+      </ToastProvider>
+    );
+  }
+
+  // --------------------------------------------------------------------------
+  // PORTALE UFFICIO (Unchanged workflows & layout)
+  // --------------------------------------------------------------------------
   return (
-    <div className="min-h-screen bg-[#f4f6f8] flex flex-col font-sans text-slate-900 select-none">
-      {/* Offline Status Alert */}
-      <OfflineBanner />
+    <ToastProvider>
+      <div className="min-h-screen bg-[#f4f6f8] flex flex-col font-sans text-slate-900 select-none">
+        {/* Offline Status Alert */}
+        <OfflineBanner statusOverride={onlineStatus} />
 
-      {/* Primary Top Header */}
-      <Header
-        currentRole={currentRole}
-        activeView={activeView}
-        onNavigate={(view) => setActiveView(view)}
-        onLogout={handleLogout}
-        onSwitchRole={handleSwitchRole}
-        companySettings={companySettings}
-        isOnline={isOnline}
-        notificationPermission={notificationPermission}
-        onEnableNotifications={handleEnableNotifications}
-        newOrdersCount={newOrdersCount}
-        activeCommitmentsCount={activeCommitmentsCount}
-      />
-
-      {/* Main View Area */}
-      <main className="flex-1 w-full max-w-[1440px] mx-auto p-3 sm:p-5 lg:p-6">
-        {/* INTERFACCIA MAGAZZINO (Mobile First) */}
-        {activeView === 'magazzino' && (
-          <WarehouseView
-            products={products}
-            isProductsLoading={isProductsLoading}
-            companySettings={companySettings}
-            isOnline={isOnline}
-            onOpenExcelModal={() => setShowExcelModal(true)}
-            editingOrder={editingOrder}
-            onCancelEditOrder={() => setEditingOrder(null)}
-            onOrderSaved={() => setEditingOrder(null)}
-            commitments={commitments}
-            pendingCommitmentToLoad={pendingCommitmentToLoad}
-            onCommitmentLoaded={() => setPendingCommitmentToLoad(null)}
-          />
-        )}
-
-        {/* INTERFACCIA MAGAZZINO: SOLA LETTURA IMPEGNI CLIENTI & VELUX */}
-        {activeView === 'magazzino_impegni' && (
-          <CommitmentsView
-            commitments={commitments}
-            products={products}
-            readOnly={true}
-            onRefreshCommitments={async () => {
-              const refreshed = await fetchCommitments(true);
-              setCommitments(refreshed);
-            }}
-            onLoadCommitmentIntoOrder={(commitment) => {
-              setPendingCommitmentToLoad(commitment);
-              setActiveView('magazzino');
-            }}
-          />
-        )}
-
-        {activeView === 'magazzino_storico' && (
-          <OfficeDashboard
-            orders={orders}
-            products={products}
-            companySettings={companySettings}
-            newOrderAlert={null}
-            onClearNewOrderAlert={() => {}}
-            onOpenExcelModal={() => {}}
-            isHistoricView={true}
-            readOnly={true}
-            onEditOrder={(order) => {
-              setEditingOrder(order);
-              setActiveView('magazzino');
-            }}
-          />
-        )}
-
-        {/* INTERFACCIA UFFICIO: DASHBOARD */}
-        {activeView === 'ufficio_dashboard' && (
-          <OfficeDashboard
-            orders={orders}
-            products={products}
-            companySettings={companySettings}
-            newOrderAlert={newOrderAlert}
-            onClearNewOrderAlert={() => setNewOrderAlert(null)}
-            onOpenExcelModal={() => setShowExcelModal(true)}
-            isHistoricView={false}
-            onArchiveOrder={async (order) => {
-              await archiveOrder(order.id);
-              setOrders(await fetchOrders(true));
-            }}
-            onEditOrder={(order) => {
-              setEditingOrder(order);
-              setActiveView('magazzino');
-            }}
-          />
-        )}
-
-        {/* INTERFACCIA UFFICIO: IMPEGNI CLIENTI & SEZIONE VELUX */}
-        {activeView === 'ufficio_impegni' && (
-          <CommitmentsView
-            commitments={commitments}
-            products={products}
-            readOnly={false}
-            onRefreshCommitments={async () => {
-              const refreshed = await fetchCommitments(true);
-              setCommitments(refreshed);
-            }}
-          />
-        )}
-
-        {/* INTERFACCIA UFFICIO: STORICO COMPLETO */}
-        {activeView === 'ufficio_storico' && (
-          <OfficeDashboard
-            orders={orders}
-            products={products}
-            companySettings={companySettings}
-            newOrderAlert={newOrderAlert}
-            onClearNewOrderAlert={() => setNewOrderAlert(null)}
-            onOpenExcelModal={() => setShowExcelModal(true)}
-            isHistoricView={true}
-          />
-        )}
-
-        {activeView === 'ufficio_cestino' && (
-          <OfficeDashboard
-            orders={orders}
-            products={products}
-            companySettings={companySettings}
-            newOrderAlert={null}
-            onClearNewOrderAlert={() => {}}
-            onOpenExcelModal={() => {}}
-            isHistoricView={true}
-            isTrashView={true}
-            onRestoreOrder={async (order) => {
-              await restoreOrder(order.id);
-              setOrders(await fetchOrders(true));
-            }}
-          />
-        )}
-
-        {/* INTERFACCIA UFFICIO: CATALOGO ARTICOLI & EXCEL */}
-        {activeView === 'ufficio_catalogo' && (
-          <OfficeCatalogView
-            products={products}
-            companySettings={companySettings}
-            onOpenExcelImport={() => setShowExcelModal(true)}
-          />
-        )}
-
-        {/* INTERFACCIA UFFICIO: IMPOSTAZIONI & SUPABASE */}
-        {activeView === 'ufficio_impostazioni' && (
-          <SettingsModal
-            initialSettings={companySettings}
-            currentRole={currentRole}
-            onSettingsSaved={(newSettings) => setCompanySettings(newSettings)}
-          />
-        )}
-      </main>
-
-      {/* Global Excel Import Modal (SheetJS) */}
-      {showExcelModal && (
-        <ExcelImportModal
-          products={products}
-          onClose={() => setShowExcelModal(false)}
-          onImportCompleted={async () => {
-            const reloaded = await fetchProducts();
-            setProducts(reloaded);
-          }}
+        {/* Primary Top Header */}
+        <Header
+          currentRole={currentRole}
+          activeView={activeView}
+          onNavigate={(view) => setActiveView(view)}
+          onLogout={handleLogout}
+          onSwitchRole={handleSwitchRole}
+          companySettings={companySettings}
+          isOnline={isOnline}
+          notificationPermission={notificationPermission}
+          onEnableNotifications={handleEnableNotifications}
+          newOrdersCount={newOrdersCount}
+          activeCommitmentsCount={activeCommitmentsCount}
         />
-      )}
-    </div>
+
+        {/* Main View Area */}
+        <main className="flex-1 w-full max-w-[1440px] mx-auto p-3 sm:p-5 lg:p-6">
+          {/* Edit order requested from Office Dashboard */}
+          {activeView === 'magazzino' && (
+            <WarehouseView
+              products={products}
+              isProductsLoading={isProductsLoading}
+              companySettings={companySettings}
+              isOnline={isOnline}
+              warehouseLocation={warehouseLocation}
+              onWarehouseLocationChange={handleWarehouseLocationChange}
+              editingOrder={editingOrder}
+              onCancelEditOrder={() => {
+                setEditingOrder(null);
+                setActiveView('ufficio_dashboard');
+              }}
+              onOrderSaved={() => {
+                setEditingOrder(null);
+                setActiveView('ufficio_dashboard');
+              }}
+              commitments={commitments}
+              pendingCommitmentToLoad={pendingCommitmentToLoad}
+              onCommitmentLoaded={() => setPendingCommitmentToLoad(null)}
+              onOrdersQueueChanged={refreshPendingCount}
+            />
+          )}
+
+          {/* INTERFACCIA UFFICIO: DASHBOARD */}
+          {activeView === 'ufficio_dashboard' && (
+            <OfficeDashboard
+              orders={orders}
+              products={products}
+              companySettings={companySettings}
+              newOrderAlert={newOrderAlert}
+              onClearNewOrderAlert={() => setNewOrderAlert(null)}
+              onOpenExcelModal={() => setShowExcelModal(true)}
+              isHistoricView={false}
+              onArchiveOrder={async (order) => {
+                await archiveOrder(order.id);
+                setOrders(await fetchOrders(true));
+              }}
+              onEditOrder={(order) => {
+                setEditingOrder(order);
+                setActiveView('magazzino');
+              }}
+            />
+          )}
+
+          {/* INTERFACCIA UFFICIO: IMPEGNI CLIENTI & SEZIONE VELUX */}
+          {activeView === 'ufficio_impegni' && (
+            <CommitmentsView
+              commitments={commitments}
+              products={products}
+              readOnly={false}
+              onRefreshCommitments={async () => {
+                const refreshed = await fetchCommitments(true);
+                setCommitments(refreshed);
+              }}
+            />
+          )}
+
+          {/* INTERFACCIA UFFICIO: STORICO COMPLETO */}
+          {activeView === 'ufficio_storico' && (
+            <OfficeDashboard
+              orders={orders}
+              products={products}
+              companySettings={companySettings}
+              newOrderAlert={newOrderAlert}
+              onClearNewOrderAlert={() => setNewOrderAlert(null)}
+              onOpenExcelModal={() => setShowExcelModal(true)}
+              isHistoricView={true}
+            />
+          )}
+
+          {activeView === 'ufficio_cestino' && (
+            <OfficeDashboard
+              orders={orders}
+              products={products}
+              companySettings={companySettings}
+              newOrderAlert={null}
+              onClearNewOrderAlert={() => {}}
+              onOpenExcelModal={() => {}}
+              isHistoricView={true}
+              isTrashView={true}
+              onRestoreOrder={async (order) => {
+                await restoreOrder(order.id);
+                setOrders(await fetchOrders(true));
+              }}
+            />
+          )}
+
+          {/* INTERFACCIA UFFICIO: CATALOGO ARTICOLI & EXCEL */}
+          {activeView === 'ufficio_catalogo' && (
+            <OfficeCatalogView
+              products={products}
+              companySettings={companySettings}
+              onOpenExcelImport={() => setShowExcelModal(true)}
+            />
+          )}
+
+          {/* INTERFACCIA UFFICIO: IMPOSTAZIONI & SUPABASE */}
+          {activeView === 'ufficio_impostazioni' && (
+            <SettingsModal
+              initialSettings={companySettings}
+              currentRole={currentRole}
+              onSettingsSaved={(newSettings) => setCompanySettings(newSettings)}
+            />
+          )}
+        </main>
+
+        {/* Global Excel Import Modal (SheetJS) */}
+        {showExcelModal && (
+          <ExcelImportModal
+            products={products}
+            onClose={() => setShowExcelModal(false)}
+            onImportCompleted={async () => {
+              const reloaded = await fetchProducts();
+              setProducts(reloaded);
+            }}
+          />
+        )}
+      </div>
+    </ToastProvider>
   );
 }

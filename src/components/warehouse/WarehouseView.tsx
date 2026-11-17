@@ -1,9 +1,7 @@
-import React, { useState, useMemo, useRef, useDeferredValue } from 'react';
+import React, { useState, useMemo, useRef, useDeferredValue, useEffect, useCallback } from 'react';
 import {
   Search,
   Plus,
-  Minus,
-  Trash2,
   Send,
   CheckCircle2,
   RotateCcw,
@@ -16,39 +14,55 @@ import {
   Receipt,
   FileText,
   AlignLeft,
-  Delete,
   Warehouse,
-  Hash,
   Camera,
-  Edit3
+  Edit3,
+  ShoppingCart,
+  QrCode,
+  Sparkles,
+  WifiOff,
 } from 'lucide-react';
-import { Product, CompanySettings, OrderDocumentType, ORDER_DOCUMENT_LABELS, WarehouseLocation, Order, CustomerCommitment } from '../../types';
-import { searchProducts } from '../../lib/search';
-import { createNewOrder, updateExistingOrder, fetchProductUnitOptions, saveProductUnitOption, markCommitmentAsLoaded } from '../../services/db';
+import {
+  Product,
+  CompanySettings,
+  OrderDocumentType,
+  ORDER_DOCUMENT_LABELS,
+  WarehouseLocation,
+  Order,
+  CustomerCommitment,
+} from '../../types';
+import { searchProducts, normalizeSearchString } from '../../lib/search';
+import {
+  createNewOrder,
+  updateExistingOrder,
+  fetchProductUnitOptions,
+  saveProductUnitOption,
+  markCommitmentAsLoaded,
+} from '../../services/db';
 import { decodeCommitmentQrPayload } from '../../lib/commitmentQr';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
-
-interface CartItem {
-  id: string;
-  product?: Product;
-  quantity: number;
-  unitOfMeasure?: string;
-  isDescription?: boolean;
-  description?: string;
-}
+import { TouchNumpadModal } from './TouchNumpadModal';
+import { WarehouseCartPanel, CartItem } from './WarehouseCartPanel';
+import { ConfirmDialog } from './ui/ConfirmDialog';
+import { ResponsiveSheetModal } from './ui/ResponsiveSheetModal';
+import { EmptyState, SkeletonList } from './ui/EmptyState';
+import { useToast } from './ui/ToastProvider';
 
 interface WarehouseViewProps {
   products: Product[];
   companySettings: CompanySettings;
   isOnline: boolean;
   isProductsLoading?: boolean;
-  onOpenExcelModal?: () => void;
+  warehouseLocation: WarehouseLocation;
+  onWarehouseLocationChange: (loc: WarehouseLocation) => void;
   editingOrder?: Order | null;
   onCancelEditOrder?: () => void;
   onOrderSaved?: (order: Order) => void;
   commitments?: CustomerCommitment[];
   pendingCommitmentToLoad?: CustomerCommitment | null;
   onCommitmentLoaded?: () => void;
+  onOrdersQueueChanged?: () => void;
+  onCartStatsChange?: (stats: { lines: number; units: number }) => void;
 }
 
 const DRAFT_STORAGE_KEY = 'magazzino_active_draft_v1';
@@ -81,31 +95,94 @@ function loadRecentCodes(): string[] {
   }
 }
 
+function mapOrderToCart(order: Order, products: Product[]): CartItem[] {
+  if (!order.items || order.items.length === 0) return [];
+  return order.items.map(it => {
+    if (it.line_type === 'DESCRIPTION') {
+      return {
+        id: it.id || `desc-${Math.random()}`,
+        isDescription: true,
+        description: it.manual_description || it.product_description_snapshot,
+        quantity: 0,
+      };
+    }
+    const matched = products.find(p => p.code === it.product_code_snapshot);
+    return {
+      id: it.id || it.product_code_snapshot,
+      product: matched || {
+        id: it.product_id || it.product_code_snapshot,
+        code: it.product_code_snapshot,
+        description: it.product_description_snapshot,
+        unit_of_measure: it.unit_of_measure_snapshot,
+        alternative_code: it.alternative_code_snapshot,
+        created_at: '',
+        updated_at: '',
+      },
+      quantity: it.quantity,
+      unitOfMeasure: it.unit_of_measure_snapshot,
+    };
+  });
+}
+
+function escapeRegExp(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const HighlightMatch: React.FC<{ text: string; query: string }> = ({ text, query }) => {
+  const cleanTokens = useMemo(() => {
+    const tokens = normalizeSearchString(query)
+      .split(' ')
+      .map(t => t.trim())
+      .filter(t => t.length >= 2);
+    return [...new Set(tokens)];
+  }, [query]);
+
+  if (!cleanTokens.length || !text) return <>{text}</>;
+
+  const pattern = new RegExp(`(${cleanTokens.map(escapeRegExp).join('|')})`, 'gi');
+  const parts = text.split(pattern);
+
+  return (
+    <>
+      {parts.map((part, idx) => {
+        const isMatch = cleanTokens.some(t => normalizeSearchString(part) === t);
+        return isMatch ? (
+          <mark
+            key={idx}
+            className="bg-amber-200/90 text-slate-950 rounded px-0.5 font-extrabold"
+          >
+            {part}
+          </mark>
+        ) : (
+          <React.Fragment key={idx}>{part}</React.Fragment>
+        );
+      })}
+    </>
+  );
+};
+
 export const WarehouseView: React.FC<WarehouseViewProps> = ({
   products,
   companySettings,
   isOnline,
   isProductsLoading = false,
+  warehouseLocation,
+  onWarehouseLocationChange,
   editingOrder = null,
   onCancelEditOrder,
   onOrderSaved,
   commitments = [],
   pendingCommitmentToLoad = null,
   onCommitmentLoaded,
+  onOrdersQueueChanged,
+  onCartStatsChange,
 }) => {
+  const { showToast } = useToast();
   const initialDraft = useMemo(() => loadSavedDraft(), []);
 
   const [customerReference, setCustomerReference] = useState(() =>
     editingOrder ? editingOrder.customer_reference || '' : initialDraft.customerReference || ''
   );
-  const [warehouseLocation, setWarehouseLocation] = useState<WarehouseLocation>(() => {
-    if (editingOrder?.warehouse_location) return editingOrder.warehouse_location;
-    try {
-      return (localStorage.getItem('saggin_warehouse_location') as WarehouseLocation) || 'MAGAZZINO';
-    } catch {
-      return 'MAGAZZINO';
-    }
-  });
   const [unitOptions, setUnitOptions] = useState<Record<string, string[]>>({});
   const [newUnitDraft, setNewUnitDraft] = useState<Record<string, string>>({});
   const [documentType, setDocumentType] = useState<OrderDocumentType | null>(() =>
@@ -114,45 +191,21 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const deferredSearchQuery = useDeferredValue(searchQuery);
 
-  // Initialize cart from editingOrder items or draft
-  const [cart, setCart] = useState<CartItem[]>(() => {
-    if (editingOrder?.items && editingOrder.items.length > 0) {
-      return editingOrder.items.map(it => {
-        if (it.line_type === 'DESCRIPTION') {
-          return {
-            id: it.id || `desc-${Math.random()}`,
-            isDescription: true,
-            description: it.manual_description || it.product_description_snapshot,
-            quantity: 0,
-          };
-        }
-        // Match product from catalog by code if available
-        const matched = products.find(p => p.code === it.product_code_snapshot);
-        return {
-          id: it.id || it.product_code_snapshot,
-          product: matched || {
-            id: it.product_id || it.product_code_snapshot,
-            code: it.product_code_snapshot,
-            description: it.product_description_snapshot,
-            unit_of_measure: it.unit_of_measure_snapshot,
-            alternative_code: it.alternative_code_snapshot,
-            created_at: '',
-            updated_at: '',
-          },
-          quantity: it.quantity,
-          unitOfMeasure: it.unit_of_measure_snapshot,
-        };
-      });
-    }
-    return Array.isArray(initialDraft.cart) ? initialDraft.cart : [];
-  });
+  const [cart, setCart] = useState<CartItem[]>(() =>
+    editingOrder ? mapOrderToCart(editingOrder, products) : Array.isArray(initialDraft.cart) ? initialDraft.cart : []
+  );
 
   const [recentCodes, setRecentCodes] = useState<string[]>(() => loadRecentCodes());
   const [showDescriptionEditor, setShowDescriptionEditor] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
-  const [submittedOrderNumber, setSubmittedOrderNumber] = useState<string | null>(null);
+  const [showClearCartConfirm, setShowClearCartConfirm] = useState(false);
+  const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false);
+  const [submittedOrderInfo, setSubmittedOrderInfo] = useState<{
+    orderNumber: string;
+    wasOffline: boolean;
+  } | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [showScannerModal, setShowScannerModal] = useState(false);
   const [loadedCommitmentBanner, setLoadedCommitmentBanner] = useState<{
@@ -164,21 +217,54 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     count: number;
   } | null>(null);
 
-  // Dedicated Mobile & Tablet Touch Quick Quantity Pad Modal
   const [editingItem, setEditingItem] = useState<CartItem | null>(null);
-  const [keypadValue, setKeypadValue] = useState<string>('1');
-  const [keypadFreshOpen, setKeypadFreshOpen] = useState<boolean>(false);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const prevEditingOrderIdRef = useRef<string | null>(editingOrder?.id || null);
 
-  // Helper to inject all items and metadata from a Customer Commitment (via QR scan or list click)
-  const applyCommitmentToOrder = React.useCallback(
+  // Sync editingOrder transitions safely even when kept mounted across navigation tabs
+  useEffect(() => {
+    const nextId = editingOrder?.id || null;
+    if (nextId && nextId !== prevEditingOrderIdRef.current && editingOrder) {
+      prevEditingOrderIdRef.current = nextId;
+      setSubmittedOrderInfo(null);
+      setCustomerReference(editingOrder.customer_reference || '');
+      setDocumentType(editingOrder.document_type || 'DDT');
+      if (editingOrder.warehouse_location) {
+        onWarehouseLocationChange(editingOrder.warehouse_location);
+      }
+      setCart(mapOrderToCart(editingOrder, products));
+      setLoadedCommitmentBanner(null);
+      setSearchQuery('');
+    } else if (!nextId && prevEditingOrderIdRef.current) {
+      prevEditingOrderIdRef.current = null;
+      const restored = loadSavedDraft();
+      setCustomerReference(restored.customerReference || '');
+      setDocumentType(restored.documentType || null);
+      setCart(Array.isArray(restored.cart) ? restored.cart : []);
+      setLoadedCommitmentBanner(null);
+    }
+  }, [editingOrder, products, onWarehouseLocationChange]);
+
+  const triggerHaptic = useCallback(() => {
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate(25);
+      } catch {
+        // Ignore
+      }
+    }
+  }, []);
+
+  // Inject items & metadata from a Customer Commitment (via QR scan or list click)
+  const applyCommitmentToOrder = useCallback(
     (commitmentData: {
       id?: string;
       commitment_number: string;
       customer_name: string;
       category: 'STANDARD' | 'VELUX';
       installer_name?: string | null;
+      notes?: string | null;
       items: {
         product_id?: string | null;
         product_code: string;
@@ -188,6 +274,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       }[];
     }) => {
       triggerHaptic();
+      setSubmittedOrderInfo(null);
       setDocumentType(prev => prev || 'DDT');
 
       const formattedRef = `${commitmentData.customer_name} - Impegno N° ${commitmentData.commitment_number}${
@@ -241,6 +328,7 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
         number: commitmentData.commitment_number,
         customer: commitmentData.customer_name,
         installer: commitmentData.installer_name,
+        notes: commitmentData.notes || null,
         category: commitmentData.category,
         count: commitmentData.items.length,
       });
@@ -248,12 +336,18 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       if (commitmentData.id) {
         void markCommitmentAsLoaded(commitmentData.id);
       }
+
+      showToast({
+        message: `Impegno N° ${commitmentData.commitment_number} collegato`,
+        detail: commitmentData.customer_name,
+        tone: 'success',
+      });
     },
-    [products]
+    [products, showToast, triggerHaptic]
   );
 
-  // If the warehouse operator clicked "Carica nell'Ordine" from the Impegni Clienti view
-  React.useEffect(() => {
+  // Triggered when warehouse operator selects "Carica nell'Ordine" from Impegni Clienti view
+  useEffect(() => {
     if (pendingCommitmentToLoad) {
       applyCommitmentToOrder(pendingCommitmentToLoad);
       if (onCommitmentLoaded) {
@@ -262,8 +356,9 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     }
   }, [pendingCommitmentToLoad, applyCommitmentToOrder, onCommitmentLoaded]);
 
-  // Persist active draft automatically so phone lock / refresh never loses a load in progress
-  React.useEffect(() => {
+  // Auto-persist active draft cleanly when not editing an existing order
+  useEffect(() => {
+    if (editingOrder) return;
     try {
       if (cart.length === 0 && !customerReference.trim() && !documentType) {
         localStorage.removeItem(DRAFT_STORAGE_KEY);
@@ -276,10 +371,10 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     } catch {
       // Ignore storage quota errors
     }
-  }, [cart, customerReference, documentType]);
+  }, [cart, customerReference, documentType, editingOrder]);
 
-  // Preload custom unit options for any restored cart items
-  React.useEffect(() => {
+  // Preload custom unit options for restored/editing cart items
+  useEffect(() => {
     for (const item of cart) {
       if (item.product?.id && !unitOptions[item.product.id]) {
         const pid = item.product.id;
@@ -288,19 +383,18 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
         );
       }
     }
-  }, []);
+  }, [cart.length]);
 
-  // Resolve recent products from catalog for 1-tap quick add
+  // Recent 8 products for 1-tap selection
   const recentProducts = useMemo(() => {
     if (recentCodes.length === 0 || products.length === 0) return [];
     const byCode = new Map(products.map(p => [p.code, p]));
     return recentCodes
       .map(code => byCode.get(code))
       .filter((p): p is Product => Boolean(p))
-      .slice(0, 6);
+      .slice(0, 8);
   }, [recentCodes, products]);
 
-  // Map of product codes currently in cart for instant visual indicator during search
   const cartQuantitiesByCode = useMemo(() => {
     const map: Record<string, number> = {};
     for (const item of cart) {
@@ -311,41 +405,31 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     return map;
   }, [cart]);
 
-  // Filtered search results
   const searchResults = useMemo(() => {
     if (!deferredSearchQuery.trim()) return [];
     return searchProducts(products, deferredSearchQuery, 30);
   }, [products, deferredSearchQuery]);
 
-  // Total lines and total units count
   const totalLines = cart.length;
   const productLinesCount = useMemo(
     () => cart.filter(item => !item.isDescription && item.product).length,
     [cart]
   );
-  const totalUnits = useMemo(() => {
-    return Number(cart.reduce((acc, item) => acc + (item.isDescription ? 0 : item.quantity), 0).toFixed(3));
-  }, [cart]);
+  const totalUnits = useMemo(
+    () => Number(cart.reduce((acc, item) => acc + (item.isDescription ? 0 : item.quantity), 0).toFixed(3)),
+    [cart]
+  );
 
-  // Haptic feedback helper
-  const triggerHaptic = () => {
-    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-      try {
-        navigator.vibrate(25);
-      } catch {
-        // Ignore
-      }
-    }
-  };
+  useEffect(() => {
+    onCartStatsChange?.({ lines: totalLines, units: totalUnits });
+  }, [totalLines, totalUnits, onCartStatsChange]);
 
-  // Handle adding product (one-touch add or increment)
   const handleAddProduct = (product: Product) => {
     if (!documentType) {
       setDocumentType('DDT');
     }
     triggerHaptic();
 
-    // Track in recent products for 1-tap quick picks
     setRecentCodes(prev => {
       const next = [product.code, ...prev.filter(c => c !== product.code)].slice(0, 8);
       try {
@@ -355,6 +439,9 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       }
       return next;
     });
+
+    const prevQty = cartQuantitiesByCode[product.code] || 0;
+    const nextQty = Number((prevQty + 1).toFixed(3));
 
     setCart(prevCart => {
       const existingIndex = prevCart.findIndex(item => item.product?.code === product.code);
@@ -373,15 +460,19 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       }
     });
 
-    // Clear search query to immediately show the updated order
+    showToast({
+      message: `${product.code} aggiunto`,
+      detail: `${product.description} · Q.tà nel carico: ${nextQty}`,
+      tone: 'success',
+    });
+
     setSearchQuery('');
   };
 
-  // Adjust quantity with +/-
   const handleQuantityDelta = (productCode: string, delta: number) => {
     triggerHaptic();
-    setCart(prevCart => {
-      return prevCart
+    setCart(prevCart =>
+      prevCart
         .map(item => {
           if (item.product?.code === productCode) {
             const newQty = Number((item.quantity + delta).toFixed(3));
@@ -389,79 +480,49 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
           }
           return item;
         })
-        .filter((item): item is CartItem => item !== null);
-    });
+        .filter((item): item is CartItem => item !== null)
+    );
   };
 
-  // Open dedicated mobile/tablet quantity editor
   const handleOpenQuantityPad = (item: CartItem) => {
     triggerHaptic();
     setEditingItem(item);
-    setKeypadValue(String(item.quantity).replace('.', ','));
-    setKeypadFreshOpen(true);
   };
 
-  const handleNumpadDigit = (digit: string) => {
-    triggerHaptic();
-    setKeypadValue(prev => {
-      if (keypadFreshOpen) {
-        setKeypadFreshOpen(false);
-        return digit === ',' ? '0,' : digit;
-      }
-      if (digit === ',' && (prev.includes(',') || prev.includes('.'))) {
-        return prev;
-      }
-      if (prev === '0' && digit !== ',') {
-        return digit;
-      }
-      if (prev.length >= 9) return prev;
-      return prev + digit;
-    });
-  };
-
-  const handleNumpadBackspace = () => {
-    triggerHaptic();
-    setKeypadFreshOpen(false);
-    setKeypadValue(prev => (prev.length <= 1 ? '0' : prev.slice(0, -1)));
-  };
-
-  const handleApplyPreset = (delta: number) => {
-    triggerHaptic();
-    setKeypadFreshOpen(false);
-    const current = parseFloat(keypadValue.replace(',', '.')) || 0;
-    const nextVal = Math.max(1, Number((current + delta).toFixed(3)));
-    setKeypadValue(String(nextVal).replace('.', ','));
-  };
-
-  const handleSetExact = (val: number) => {
-    triggerHaptic();
-    setKeypadFreshOpen(false);
-    setKeypadValue(String(val).replace('.', ','));
-  };
-
-  const handleSaveQuantityPad = () => {
+  const handleSaveQuantityPad = (quantity: number) => {
     if (!editingItem?.product) return;
-    const editingProductCode = editingItem.product.code;
-    triggerHaptic();
-    const sanitized = keypadValue.replace(',', '.').trim();
-    const parsed = parseFloat(sanitized);
-
-    if (!isNaN(parsed) && parsed > 0) {
-      setCart(prevCart =>
-        prevCart.map(item =>
-          item.product?.code === editingProductCode
-            ? { ...item, quantity: Number(parsed.toFixed(3)) }
-            : item
-        )
-      );
-    }
+    const code = editingItem.product.code;
+    setCart(prevCart =>
+      prevCart.map(item => (item.product?.code === code ? { ...item, quantity } : item))
+    );
+    showToast({
+      message: `Quantità aggiornata: ${quantity} ${editingItem.unitOfMeasure || editingItem.product.unit_of_measure}`,
+      detail: editingItem.product.description,
+      tone: 'info',
+    });
     setEditingItem(null);
   };
 
-  // Remove item completely
   const handleRemoveItem = (itemId: string) => {
     triggerHaptic();
+    const target = cart.find(i => i.id === itemId);
     setCart(prevCart => prevCart.filter(item => item.id !== itemId));
+    showToast({
+      message: target?.isDescription ? 'Nota rimossa' : 'Articolo rimosso dal carico',
+      detail: target?.product?.code || undefined,
+      tone: 'info',
+    });
+  };
+
+  const handleConfirmClearCart = () => {
+    triggerHaptic();
+    setCart([]);
+    setShowClearCartConfirm(false);
+    setIsCartDrawerOpen(false);
+    showToast({
+      message: 'Distinta carrello svuotata',
+      tone: 'warning',
+    });
   };
 
   const handleAddDescriptionLine = () => {
@@ -474,21 +535,49 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     ]);
     setDescriptionDraft('');
     setShowDescriptionEditor(false);
+    showToast({
+      message: 'Nota descrittiva aggiunta',
+      tone: 'success',
+    });
   };
 
-  // Handle scanned barcode / QR code (Supports both single product QR/EAN and Customer Commitment IMP| / SAGGIN_IMP| QR)
+  const handleSaveCustomUnit = async (itemId: string, productId: string) => {
+    const unit = (newUnitDraft[productId] || '').trim().toUpperCase();
+    if (!unit) return;
+    try {
+      await saveProductUnitOption(productId, unit);
+      setUnitOptions(prev => ({
+        ...prev,
+        [productId]: [...new Set([...(prev[productId] || []), unit])],
+      }));
+      setCart(prev =>
+        prev.map(row => (row.id === itemId ? { ...row, unitOfMeasure: unit } : row))
+      );
+      setNewUnitDraft(prev => ({ ...prev, [productId]: '' }));
+      showToast({
+        message: `Unità di misura "${unit}" salvata`,
+        tone: 'success',
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unità non salvata';
+      setSubmitError(msg);
+      showToast({ message: msg, tone: 'error' });
+    }
+  };
+
+  // Barcode / QR resolution (IMP|, SAGGIN_IMP|, direct commitment match, code, EAN, partial)
   const handleBarcodeScanned = (decodedText: string) => {
     triggerHaptic();
     const cleanText = decodedText.trim();
     if (!cleanText) return;
 
-    // 0. Check if scanned QR is a Customer Commitment (Impegno Cliente / Velux)
     const decodedCommitment = decodeCommitmentQrPayload(cleanText);
     if (decodedCommitment) {
       const matchedStoredCommitment = commitments.find(
         c =>
           (decodedCommitment.id && c.id === decodedCommitment.id) ||
-          c.commitment_number.trim().toLowerCase() === decodedCommitment.commitment_number.trim().toLowerCase()
+          c.commitment_number.trim().toLowerCase() ===
+            decodedCommitment.commitment_number.trim().toLowerCase()
       );
       if (matchedStoredCommitment) {
         applyCommitmentToOrder(matchedStoredCommitment);
@@ -499,7 +588,6 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       return;
     }
 
-    // 0b. Also check if scanned code directly matches a stored Customer Commitment number
     const directCommitmentMatch = commitments.find(
       c => c.commitment_number.trim().toLowerCase() === cleanText.toLowerCase()
     );
@@ -509,41 +597,37 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
       return;
     }
 
-    // 1. Try exact product code match (ignoring leading/trailing spaces)
     let matched = products.find(p => p.code.trim().toLowerCase() === cleanText.toLowerCase());
-    // 2. Try alternative code (barcode/EAN) match
     if (!matched) {
       matched = products.find(
         p => p.alternative_code && p.alternative_code.trim().toLowerCase() === cleanText.toLowerCase()
       );
     }
-    // 3. Try partial code match if length is relevant
     if (!matched && cleanText.length >= 2) {
-      matched = products.find(p => p.code.trim().toLowerCase() === cleanText.toLowerCase());
-      if (!matched) {
-        const candidates = products.filter(p => p.code.toLowerCase().includes(cleanText.toLowerCase()));
-        if (candidates.length === 1) {
-          matched = candidates[0];
-        }
+      const candidates = products.filter(p =>
+        p.code.toLowerCase().includes(cleanText.toLowerCase())
+      );
+      if (candidates.length === 1) {
+        matched = candidates[0];
       }
     }
 
     if (matched) {
-      if (!documentType) {
-        setDocumentType('DDT');
-      }
+      if (!documentType) setDocumentType('DDT');
       handleAddProduct(matched);
       setSearchQuery('');
     } else {
-      if (!documentType) {
-        setDocumentType('DDT');
-      }
-      // Set as search query so operator can see matching products immediately
+      if (!documentType) setDocumentType('DDT');
       setSearchQuery(cleanText);
+      showToast({
+        message: `Nessun codice esatto per "${cleanText}"`,
+        detail: 'Ricerca testuale aperta nei risultati',
+        tone: 'warning',
+      });
     }
   };
 
-  // Order submission / update
+  // Submit / update order
   const handleConfirmSubmit = async () => {
     if (cart.length === 0 || isSubmitting || !documentType) return;
 
@@ -558,15 +642,21 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
           warehouse_location: warehouseLocation,
           items: cart,
         });
-        setSubmittedOrderNumber(updated.order_number);
+        prevEditingOrderIdRef.current = null;
+        setSubmittedOrderInfo({ orderNumber: updated.order_number, wasOffline: !isOnline });
         setShowConfirmModal(false);
+        setIsCartDrawerOpen(false);
         setCart([]);
         setCustomerReference('');
         setDocumentType(null);
         setLoadedCommitmentBanner(null);
-        if (onOrderSaved) {
-          onOrderSaved(updated);
-        }
+        localStorage.removeItem(DRAFT_STORAGE_KEY);
+        onOrdersQueueChanged?.();
+        showToast({
+          message: `Ordine ${updated.order_number} aggiornato`,
+          tone: 'success',
+        });
+        onOrderSaved?.(updated);
       } else {
         const newOrder = await createNewOrder({
           customer_reference: customerReference.trim() || null,
@@ -575,62 +665,100 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
           items: cart,
         });
 
-        setSubmittedOrderNumber(newOrder.order_number);
+        setSubmittedOrderInfo({ orderNumber: newOrder.order_number, wasOffline: !isOnline });
         setShowConfirmModal(false);
+        setIsCartDrawerOpen(false);
         setCart([]);
         setCustomerReference('');
         setDocumentType(null);
         setLoadedCommitmentBanner(null);
+        localStorage.removeItem(DRAFT_STORAGE_KEY);
+        onOrdersQueueChanged?.();
+        showToast({
+          message: isOnline
+            ? `Ordine ${newOrder.order_number} inviato`
+            : `Ordine ${newOrder.order_number} salvato in coda offline`,
+          tone: isOnline ? 'success' : 'warning',
+        });
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Errore durante il salvataggio dell'ordine";
       setSubmitError(msg);
+      showToast({ message: msg, tone: 'error' });
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleResetForNewOrder = () => {
-    setSubmittedOrderNumber(null);
+    setSubmittedOrderInfo(null);
     setCart([]);
     setCustomerReference('');
     setDocumentType(null);
     setSearchQuery('');
     setLoadedCommitmentBanner(null);
+    window.setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 80);
   };
 
   // ------------------------------------------------------------------------
   // SCREEN: ORDER SUBMITTED SUCCESSFULLY
   // ------------------------------------------------------------------------
-  if (submittedOrderNumber) {
+  if (submittedOrderInfo) {
     return (
-      <div className="min-h-[calc(100dvh-7rem)] flex flex-col items-center px-4 py-6 text-center select-none">
-        <div className="w-full max-w-md my-auto bg-white p-6 sm:p-9 rounded-2xl border border-slate-200 shadow-xl flex flex-col items-center">
-          <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mb-5 border border-emerald-200">
-            <CheckCircle2 className="w-11 h-11 stroke-[2.5]" />
+      <div className="min-h-[calc(100dvh-10rem)] flex flex-col items-center justify-center px-3 py-6 text-center select-none animate-wms-slide-up">
+        <div className="w-full max-w-md bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-xl flex flex-col items-center">
+          <div
+            className={`w-20 h-20 rounded-2xl flex items-center justify-center mb-5 border ${
+              submittedOrderInfo.wasOffline
+                ? 'bg-amber-50 text-amber-600 border-amber-200'
+                : 'bg-emerald-50 text-emerald-600 border-emerald-200'
+            }`}
+          >
+            {submittedOrderInfo.wasOffline ? (
+              <WifiOff className="w-10 h-10 stroke-[2.25]" />
+            ) : (
+              <CheckCircle2 className="w-11 h-11 stroke-[2.5]" />
+            )}
           </div>
 
-          <span className="text-[11px] font-mono font-extrabold tracking-widest text-emerald-800 uppercase bg-emerald-100/80 px-3 py-1 rounded-md mb-2">
-            TRASMISSIONE COMPLETATA
+          <span
+            className={`text-[11px] font-mono font-extrabold tracking-widest uppercase px-3 py-1 rounded-md mb-2 ${
+              submittedOrderInfo.wasOffline
+                ? 'bg-amber-100 text-amber-900'
+                : 'bg-emerald-100 text-emerald-800'
+            }`}
+          >
+            {submittedOrderInfo.wasOffline
+              ? 'SALVATO IN CODA OFFLINE'
+              : 'TRASMISSIONE COMPLETATA'}
           </span>
 
           <h2 className="text-xl sm:text-2xl font-black tracking-tight text-slate-900 mb-1">
-            Ordine Inviato in Ufficio
+            {submittedOrderInfo.wasOffline
+              ? 'Ordine Pronto sul Dispositivo'
+              : 'Ordine Inviato in Ufficio'}
           </h2>
-          <p className="text-xs sm:text-sm text-slate-500 mb-6 max-w-xs">
-            La postazione amministrativa di {companySettings.companyName || 'Saggin'} ha ricevuto la distinta di carico.
+          <p className="text-xs sm:text-sm text-slate-500 mb-6 max-w-xs leading-relaxed">
+            {submittedOrderInfo.wasOffline
+              ? 'La connessione era assente. Verrà sincronizzato automaticamente appena torna la rete.'
+              : `La postazione amministrativa di ${
+                  companySettings.companyName || 'Saggin'
+                } ha ricevuto la distinta di carico.`}
           </p>
 
           <div className="w-full bg-[#0b0f19] rounded-xl p-5 mb-6 text-center border border-slate-800">
             <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest block mb-1">
               NUMERO PROGRESSIVO DOCUMENTO
             </span>
-            <div className="text-3xl sm:text-4xl font-black font-mono tracking-wider text-white">
-              {submittedOrderNumber}
+            <div className="text-3xl sm:text-4xl font-black font-mono tracking-wider text-white tabular-nums">
+              {submittedOrderInfo.orderNumber}
             </div>
           </div>
 
           <button
+            type="button"
             onClick={handleResetForNewOrder}
             className="w-full h-14 bg-red-600 hover:bg-red-700 active:scale-[0.99] text-white font-extrabold rounded-xl text-base flex items-center justify-center gap-2.5 shadow-lg shadow-red-600/20 transition touch-manipulation"
           >
@@ -642,137 +770,178 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     );
   }
 
-  // ------------------------------------------------------------------------
-  // MAIN WAREHOUSE TERMINAL (MOBILE, PORTRAIT TABLET & WINDOWS TOUCH TABLET)
-  // ------------------------------------------------------------------------
+  const cartPanelProps = {
+    cart,
+    documentType,
+    editingOrder,
+    isSubmitting,
+    unitOptions,
+    newUnitDraft,
+    showDescriptionEditor,
+    descriptionDraft,
+    totalLines,
+    productLinesCount,
+    totalUnits,
+    onToggleDescriptionEditor: () => setShowDescriptionEditor(v => !v),
+    onDescriptionDraftChange: setDescriptionDraft,
+    onCancelDescription: () => {
+      setShowDescriptionEditor(false);
+      setDescriptionDraft('');
+    },
+    onAddDescriptionLine: handleAddDescriptionLine,
+    onRequestClearCart: () => setShowClearCartConfirm(true),
+    onQuantityDelta: handleQuantityDelta,
+    onOpenQuantityPad: handleOpenQuantityPad,
+    onRemoveItem: handleRemoveItem,
+    onSelectUnit: (itemId: string, unit: string) =>
+      setCart(prev =>
+        prev.map(row => (row.id === itemId ? { ...row, unitOfMeasure: unit } : row))
+      ),
+    onNewUnitDraftChange: (productId: string, value: string) =>
+      setNewUnitDraft(prev => ({ ...prev, [productId]: value })),
+    onSaveCustomUnit: handleSaveCustomUnit,
+    onOpenConfirmSubmit: () => setShowConfirmModal(true),
+  };
+
   return (
-    <div className="min-h-[calc(100dvh-6rem)] flex flex-col justify-between pb-28 sm:pb-32">
-      <div className="max-w-4xl mx-auto w-full space-y-3.5 sm:space-y-4">
-        {/* BANNER IMPEGNO CLIENTE / VELUX SCANSIONATO E CARICATO NELL'ORDINE */}
-        {loadedCommitmentBanner && (
-          <div className="bg-emerald-50 border-2 border-emerald-500 rounded-2xl p-4 flex items-start sm:items-center justify-between gap-3 shadow-md">
-            <div className="flex items-center gap-3">
-              <div
-                className={`w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 font-black text-[10px] ${
-                  loadedCommitmentBanner.category === 'VELUX' ? 'bg-[#e30613]' : 'bg-emerald-600'
-                }`}
-              >
-                {loadedCommitmentBanner.category === 'VELUX' ? (
-                  'VELUX'
-                ) : (
-                  <CheckCircle2 className="w-5 h-5" />
-                )}
+    <div className="pb-40 md:pb-24 xl:pb-4">
+      <div className="xl:flex xl:items-start xl:gap-5">
+        {/* LEFT / MAIN OPERATIONAL COMPOSER WORKSPACE */}
+        <div className="flex-1 min-w-0 space-y-4">
+          {/* COMMITMENT LOADED BANNER */}
+          {loadedCommitmentBanner && (
+            <div className="bg-emerald-50 border-2 border-emerald-500 rounded-2xl p-3.5 sm:p-4 flex items-start justify-between gap-3 shadow-sm animate-wms-slide-up">
+              <div className="flex items-start gap-3 min-w-0">
+                <div
+                  className={`w-10 h-10 rounded-xl text-white flex items-center justify-center shrink-0 font-black text-[10px] ${
+                    loadedCommitmentBanner.category === 'VELUX'
+                      ? 'bg-[#e30613]'
+                      : 'bg-emerald-600'
+                  }`}
+                >
+                  {loadedCommitmentBanner.category === 'VELUX' ? (
+                    'VELUX'
+                  ) : (
+                    <QrCode className="w-5 h-5" />
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-mono font-black uppercase tracking-wider bg-emerald-600 text-white px-2 py-0.5 rounded">
+                      IMPEGNO N° {loadedCommitmentBanner.number}
+                    </span>
+                    <span className="font-extrabold text-slate-900 text-sm sm:text-base">
+                      {loadedCommitmentBanner.customer}
+                    </span>
+                    {loadedCommitmentBanner.installer && (
+                      <span className="text-[11px] font-bold text-[#e30613] bg-red-100 px-2 py-0.5 rounded">
+                        Inst: {loadedCommitmentBanner.installer}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-600 mt-1">
+                    {loadedCommitmentBanner.count > 0
+                      ? `Inseriti ${loadedCommitmentBanner.count} articoli e impostato il riferimento cliente.`
+                      : 'Riferimento cliente e N° Impegno applicati. Aggiungi o scansiona gli articoli caricati.'}
+                  </p>
+                  {loadedCommitmentBanner.notes && (
+                    <p className="text-xs font-bold text-amber-900 bg-amber-100/90 border border-amber-200 rounded-lg px-2.5 py-1 mt-1.5">
+                      Note: {loadedCommitmentBanner.notes}
+                    </p>
+                  )}
+                </div>
               </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[10px] font-mono font-black uppercase tracking-wider bg-emerald-600 text-white px-2 py-0.5 rounded">
-                    IMPEGNO N° {loadedCommitmentBanner.number} INSERITO
-                  </span>
-                  <span className="font-extrabold text-slate-900 text-sm sm:text-base">
-                    {loadedCommitmentBanner.customer}
-                  </span>
-                  {loadedCommitmentBanner.installer && (
-                    <span className="text-xs font-bold text-[#e30613] bg-red-100 px-2 py-0.5 rounded">
-                      Inst: {loadedCommitmentBanner.installer}
+              <button
+                type="button"
+                onClick={() => setLoadedCommitmentBanner(null)}
+                aria-label="Chiudi banner impegno"
+                className="w-9 h-9 rounded-lg flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-emerald-100/80 shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* EDITING ORDER BANNER */}
+          {editingOrder && (
+            <div className="bg-amber-50 border-2 border-amber-500 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm animate-wms-slide-up">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0">
+                  <Edit3 className="w-5 h-5 stroke-[2.5]" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-mono font-black uppercase tracking-wider bg-amber-500 text-white px-2 py-0.5 rounded">
+                      MODIFICA ORDINE
+                    </span>
+                    <span className="font-mono font-black text-slate-900 text-sm sm:text-base">
+                      {editingOrder.order_number}
+                    </span>
+                  </div>
+                  <p className="text-xs font-medium text-slate-700 mt-0.5">
+                    Aggiungi o modifica righe e premi &ldquo;Aggiorna Ordine&rdquo;.
+                  </p>
+                </div>
+              </div>
+              {onCancelEditOrder && (
+                <button
+                  type="button"
+                  onClick={onCancelEditOrder}
+                  className="min-h-[44px] w-full sm:w-auto px-4 rounded-xl bg-white border border-slate-300 text-xs font-extrabold text-slate-800 hover:bg-slate-100 active:scale-[0.98] transition touch-manipulation shrink-0"
+                >
+                  Annulla Modifica
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* COMPACT ORDER CONFIGURATION CARD */}
+          <section className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-3.5 sm:p-4 space-y-3.5">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-start">
+              {/* Customer / Jobsite Reference */}
+              <div className="lg:col-span-6">
+                <label
+                  htmlFor="wms-customer-ref"
+                  className="flex items-center justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5"
+                >
+                  <span>Cliente / Cantiere / Targa</span>
+                  <span className="font-medium lowercase text-slate-400">facoltativo</span>
+                </label>
+                <div className="relative flex items-center">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <Truck className="w-4 h-4" />
+                  </div>
+                  <input
+                    id="wms-customer-ref"
+                    type="text"
+                    value={customerReference}
+                    onChange={e => setCustomerReference(e.target.value)}
+                    placeholder="Es. Rossi Costruzioni / Cantiere Marostica..."
+                    className="w-full h-12 pl-10 pr-11 bg-slate-50 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10 transition placeholder:text-slate-400 placeholder:font-medium"
+                  />
+                  {customerReference && (
+                    <button
+                      type="button"
+                      onClick={() => setCustomerReference('')}
+                      aria-label="Cancella riferimento cliente"
+                      className="absolute inset-y-0 right-0 pr-2 flex items-center justify-center min-w-[44px] text-slate-400 hover:text-slate-700 touch-manipulation"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Quick Synced Loading Location */}
+              <div className="lg:col-span-6">
+                <div className="flex items-center justify-between text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">
+                  <span>Punto di Carico</span>
+                  {cart.length > 0 && !editingOrder && (
+                    <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded">
+                      BOZZA AUTO-SALVATA
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  {loadedCommitmentBanner.count > 0
-                    ? `Inseriti ${loadedCommitmentBanner.count} articoli e impostato il riferimento cliente. Puoi aggiungere altra merce o inviare l'ordine.`
-                    : `Riferimento cliente e N° Impegno impostati automaticamente sull'ordine. Scansiona o aggiungi gli articoli da spedire.`}
-                </p>
-                {loadedCommitmentBanner.notes && (
-                  <p className="text-xs font-bold text-amber-800 bg-amber-100/80 border border-amber-200 rounded-lg px-2.5 py-1 mt-1.5">
-                    Note: {loadedCommitmentBanner.notes}
-                  </p>
-                )}
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setLoadedCommitmentBanner(null)}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        )}
-
-        {/* BANNER MODIFICA / INTEGRAZIONE COMMESSA ESISTENTE */}
-        {editingOrder && (
-          <div className="bg-amber-500/10 border-2 border-amber-500 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md animate-in fade-in duration-200">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs">
-                <Edit3 className="w-5 h-5 stroke-[2.5]" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-mono font-black uppercase tracking-wider bg-amber-500 text-white px-2 py-0.5 rounded">
-                    MODIFICA IN CORSO
-                  </span>
-                  <span className="font-mono font-black text-slate-900 text-base">
-                    {editingOrder.order_number}
-                  </span>
-                </div>
-                <p className="text-xs font-medium text-slate-600 mt-0.5">
-                  Stai integrando o modificando un ordine già trasmesso. Aggiungi gli articoli mancanti e premi "Aggiorna Ordine".
-                </p>
-              </div>
-            </div>
-            {onCancelEditOrder && (
-              <button
-                type="button"
-                onClick={onCancelEditOrder}
-                className="w-full sm:w-auto px-4 py-2 rounded-xl bg-white border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100 active:scale-95 transition"
-              >
-                Annulla Modifica
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* STEP 1: ORDER HEADER & DOCUMENT CONFIG */}
-        <section className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden">
-          {/* Section Bar */}
-          <div className="bg-slate-900 text-white px-3.5 sm:px-4 py-2.5 sm:py-3 flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-6 h-6 rounded-md bg-red-600 text-white font-mono text-xs font-black flex items-center justify-center shrink-0">
-                1
-              </span>
-              <h1 className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-white truncate">
-                Impostazione Carico
-              </h1>
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {cart.length > 0 && (
-                <span className="hidden sm:inline-flex text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                  BOZZA SALVATA
-                </span>
-              )}
-              <span className="text-[10px] sm:text-[11px] font-mono font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-200 border border-slate-700">
-                {warehouseLocation === 'DEPOSITO' ? 'DEPOSITO' : 'MAGAZZINO'}
-              </span>
-              <span
-                className={`text-[10px] sm:text-[11px] font-mono font-bold px-2 py-0.5 rounded ${
-                  isOnline
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                    : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                }`}
-              >
-                {isOnline ? 'ONLINE' : 'OFFLINE'}
-              </span>
-            </div>
-          </div>
-
-          <div className="p-3.5 sm:p-5 space-y-4">
-            {/* Row 1: Warehouse Location + Customer/Truck Reference (Side-by-side on Tablet/Desktop) */}
-            <div className="grid grid-cols-1 md:grid-cols-12 gap-3.5 items-end">
-              {/* Punto di Carico (5 cols on tablet) */}
-              <div className="md:col-span-5">
-                <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">
-                  Punto di Carico
-                </label>
                 <div className="grid grid-cols-2 gap-2">
                   {(
                     [
@@ -788,17 +957,12 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                         type="button"
                         aria-pressed={selected}
                         onClick={() => {
-                          setWarehouseLocation(option.value);
-                          try {
-                            localStorage.setItem('saggin_warehouse_location', option.value);
-                          } catch {
-                            // Ignore
-                          }
+                          onWarehouseLocationChange(option.value);
                           triggerHaptic();
                         }}
-                        className={`min-h-[48px] rounded-xl border-2 px-3 py-2 flex items-center justify-center gap-2 text-xs sm:text-sm font-extrabold active:scale-[0.98] transition touch-manipulation ${
+                        className={`h-12 rounded-xl border-2 px-3 flex items-center justify-center gap-2 text-xs sm:text-sm font-extrabold active:scale-[0.98] transition touch-manipulation ${
                           selected
-                            ? 'border-slate-900 bg-slate-900 text-white shadow-xs'
+                            ? 'border-slate-900 bg-slate-900 text-white shadow-2xs'
                             : 'border-slate-200 bg-slate-50 text-slate-700 hover:bg-white hover:border-slate-300'
                         }`}
                       >
@@ -809,61 +973,32 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                   })}
                 </div>
               </div>
-
-              {/* Riferimento Cliente / Cantiere / Targa (7 cols on tablet) */}
-              <div className="md:col-span-7">
-                <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-500 mb-1.5">
-                  Cliente / Cantiere / Targa Mezzo <span className="font-normal text-slate-400">(facoltativo)</span>
-                </label>
-                <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                    <Truck className="w-4 h-4" />
-                  </div>
-                  <input
-                    type="text"
-                    value={customerReference}
-                    onChange={(e) => setCustomerReference(e.target.value)}
-                    placeholder="Es. Rossi Costruzioni / Cantiere Marostica / Targa..."
-                    className="w-full h-12 pl-10 pr-9 bg-slate-50 border-2 border-slate-200 rounded-xl text-sm font-bold text-slate-900 focus:bg-white focus:outline-none focus:border-slate-900 transition placeholder:text-slate-400 placeholder:font-medium"
-                  />
-                  {customerReference && (
-                    <button
-                      type="button"
-                      onClick={() => setCustomerReference('')}
-                      className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-slate-600"
-                      aria-label="Cancella riferimento"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
             </div>
 
-            {/* Row 2: Document Type Selector (4 large touch cards on tablet, 2x2 on phone) */}
+            {/* Compact Segmented Document Type Selector */}
             <div>
-              <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1.5">
-                <label className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
-                  Tipo Documento Richiesto <span className="text-red-600">*</span>
-                </label>
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+                  Tipo Documento <span className="text-red-600">*</span>
+                </span>
                 {!documentType ? (
-                  <span className="text-[11px] font-bold text-red-600 animate-pulse">
-                    Seleziona un documento per abilitare la ricerca
+                  <span className="text-[11px] font-bold text-red-600">
+                    Seleziona un documento
                   </span>
                 ) : (
-                  <span className="text-[11px] font-mono font-bold text-emerald-700">
-                    Selezionato: {ORDER_DOCUMENT_LABELS[documentType]}
+                  <span className="text-[11px] font-mono font-extrabold text-emerald-700">
+                    Attivo: {ORDER_DOCUMENT_LABELS[documentType]}
                   </span>
                 )}
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {(
                   [
-                    { value: 'SCONTRINO', icon: Receipt, hint: 'Vendita al banco' },
-                    { value: 'DDT', icon: Truck, hint: 'Doc. di trasporto' },
-                    { value: 'FATTURA', icon: FileText, hint: 'Emissione fattura' },
-                    { value: 'NOTA_PRELIEVO', icon: Package, hint: 'Prelievo interno' },
+                    { value: 'SCONTRINO', icon: Receipt, hint: 'Banco' },
+                    { value: 'DDT', icon: Truck, hint: 'Trasporto' },
+                    { value: 'FATTURA', icon: FileText, hint: 'Fattura' },
+                    { value: 'NOTA_PRELIEVO', icon: Package, hint: 'Interno' },
                   ] as const
                 ).map(option => {
                   const selected = documentType === option.value;
@@ -877,85 +1012,77 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                         setDocumentType(option.value);
                         triggerHaptic();
                       }}
-                      className={`min-h-[76px] rounded-xl border-2 p-3 flex flex-col items-start justify-between text-left transition active:scale-[0.98] touch-manipulation ${
+                      className={`min-h-[54px] rounded-xl border-2 px-2.5 py-2 flex items-center gap-2 text-left transition active:scale-[0.98] touch-manipulation ${
                         selected
-                          ? 'border-red-600 bg-red-50/50 shadow-xs ring-2 ring-red-600/15'
-                          : 'border-slate-200 bg-slate-50/60 hover:border-slate-300 hover:bg-white'
+                          ? 'border-red-600 bg-red-50/70 text-red-950 shadow-2xs ring-2 ring-red-600/10'
+                          : 'border-slate-200 bg-slate-50/60 hover:border-slate-300 hover:bg-white text-slate-800'
                       }`}
                     >
-                      <div className="flex items-center justify-between w-full gap-2">
-                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${
-                          selected ? 'bg-red-600 text-white' : 'bg-white border border-slate-200 text-slate-600'
-                        }`}>
-                          <Icon className="w-4 h-4" />
-                        </div>
-                        <span
-                          className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                            selected ? 'border-red-600 bg-red-600' : 'border-slate-300 bg-white'
-                          }`}
-                        >
-                          {selected && <Check className="w-3 h-3 text-white stroke-[3]" />}
-                        </span>
+                      <div
+                        className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg flex items-center justify-center shrink-0 transition ${
+                          selected
+                            ? 'bg-red-600 text-white'
+                            : 'bg-white border border-slate-200 text-slate-600'
+                        }`}
+                      >
+                        <Icon className="w-4 h-4" />
                       </div>
-                      <div className="mt-2">
-                        <span className={`block text-xs sm:text-sm font-black leading-tight ${
-                          selected ? 'text-red-950' : 'text-slate-900'
-                        }`}>
+                      <div className="min-w-0 flex-1">
+                        <span className="block text-[11px] sm:text-xs font-black leading-tight whitespace-normal">
                           {ORDER_DOCUMENT_LABELS[option.value]}
                         </span>
-                        <span className="block text-[10px] font-medium text-slate-500 mt-0.5">
+                        <span className="block text-[10px] font-medium text-slate-500 leading-tight mt-0.5">
                           {option.hint}
                         </span>
                       </div>
+                      {selected && (
+                        <Check className="w-3.5 h-3.5 text-red-600 stroke-[3] shrink-0" />
+                      )}
                     </button>
                   );
                 })}
               </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        {/* STEP 2: HIGH-SPEED PRODUCT SEARCH BAR */}
-        <section className="relative z-30">
-          <div className="bg-white rounded-2xl border border-slate-200/90 p-3 sm:p-4 shadow-xs">
-            <div className="flex items-center justify-between mb-2">
+          {/* SEARCH, SCANNER QR & RECENT 8 PRODUCTS */}
+          <section className="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-3.5 sm:p-4 space-y-3.5">
+            <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
-                <span className="w-6 h-6 rounded-md bg-slate-900 text-white font-mono text-xs font-black flex items-center justify-center shrink-0">
-                  2
+                <span className="text-xs font-extrabold uppercase tracking-wider text-slate-900">
+                  Catalogo Articoli
                 </span>
-                <span className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-slate-900 truncate">
-                  Ricerca Rapida Articoli ({products.length})
+                <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 font-mono text-[11px] font-bold text-slate-600 tabular-nums">
+                  {products.length}
                 </span>
               </div>
-              {documentType && (
-                <span className="hidden sm:inline text-[11px] font-medium text-slate-400">
-                  Ricerca multi-parola attiva (es. "cemento 25")
-                </span>
-              )}
+              <span className="hidden sm:inline text-[11px] font-medium text-slate-400">
+                Multi-parola attiva (es. &ldquo;cemento 25&rdquo;) · Enter per codice rapido
+              </span>
             </div>
 
-            <div className="relative flex items-center gap-2">
-              <div className="relative flex-1 flex items-center">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+            {/* Search Input + Scanner QR Trigger */}
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1 flex items-center min-w-0">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
                   <Search className="w-5 h-5 text-red-600" />
                 </div>
                 <input
                   ref={searchInputRef}
                   type="text"
                   value={searchQuery}
-                  onChange={(e) => {
+                  onChange={e => {
                     const val = e.target.value;
                     if (!documentType && val.trim()) {
                       setDocumentType('DDT');
                     }
-                    // If a commitment QR payload is pasted or scanned directly into the input
                     if (val.trim().startsWith('IMP|') || val.trim().startsWith('SAGGIN_IMP|')) {
                       handleBarcodeScanned(val.trim());
                       return;
                     }
                     setSearchQuery(val);
                   }}
-                  onKeyDown={(e) => {
+                  onKeyDown={e => {
                     if (e.key === 'Enter' && searchQuery.trim()) {
                       e.preventDefault();
                       handleBarcodeScanned(searchQuery.trim());
@@ -964,47 +1091,145 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                   disabled={isProductsLoading}
                   placeholder={
                     isProductsLoading
-                      ? 'Sincronizzazione catalogo articoli in corso...'
-                      : 'Digita codice, parole chiave (es. "cemento 25") o scansiona QR...'
+                      ? 'Caricamento catalogo in corso...'
+                      : 'Cerca per codice, descrizione o barcode...'
                   }
-                  className="w-full h-14 pl-12 pr-12 rounded-xl text-sm sm:text-base font-bold transition placeholder:text-slate-400 bg-slate-50 border-2 border-slate-300 text-slate-900 focus:bg-white focus:outline-none focus:border-slate-900 focus:ring-4 focus:ring-slate-900/10"
+                  className="w-full h-14 pl-11 pr-12 rounded-xl text-sm sm:text-base font-bold bg-slate-50 border-2 border-slate-300 text-slate-900 placeholder:text-slate-400 placeholder:font-medium focus:bg-white focus:outline-none focus:border-slate-900 focus:ring-4 focus:ring-slate-900/10 transition"
                 />
                 {searchQuery && (
                   <button
+                    type="button"
                     onClick={() => setSearchQuery('')}
-                    className="absolute inset-y-0 right-0 pr-3.5 flex items-center justify-center min-w-[48px] min-h-[48px] text-slate-400 hover:text-slate-700 active:scale-95 touch-manipulation"
                     aria-label="Cancella ricerca"
+                    className="absolute inset-y-0 right-0 pr-2 flex items-center justify-center min-w-[46px] text-slate-400 hover:text-slate-700 touch-manipulation"
                   >
                     <X className="w-5 h-5" />
                   </button>
                 )}
               </div>
 
-              {/* Barcode / QR Code Camera Scanner Trigger Button */}
               <button
                 type="button"
                 onClick={() => {
                   triggerHaptic();
                   setShowScannerModal(true);
                 }}
-                title="Scansiona Barcode o QR Code con Fotocamera"
                 aria-label="Scansiona codice a barre o QR code"
-                className="h-14 px-3 sm:px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-center gap-2 font-extrabold text-xs active:scale-95 transition touch-manipulation shrink-0 shadow-sm"
+                className="h-14 px-3.5 sm:px-4 rounded-xl bg-[#0b0f19] hover:bg-slate-800 text-white flex items-center justify-center gap-2 font-extrabold text-xs sm:text-sm active:scale-95 transition touch-manipulation shrink-0 shadow-sm"
               >
-                <Camera className="w-5 h-5 text-red-500 stroke-[2.5]" />
-                <span className="hidden sm:inline">Scanner QR</span>
+                <Camera className="w-5 h-5 text-red-500 stroke-[2.25]" />
+                <span className="hidden sm:inline whitespace-nowrap">Scanner QR</span>
               </button>
             </div>
 
-            {/* 1-Tap Recent / Frequent Products Strip (when documentType is selected and search is empty) */}
-            {documentType && !searchQuery.trim() && recentProducts.length > 0 && (
-              <div className="mt-2.5 pt-2.5 border-t border-slate-100">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-                    Aggiunta Rapida · Articoli Caricati di Recente
+            {/* Loading Skeleton */}
+            {isProductsLoading && <SkeletonList rows={3} />}
+
+            {/* SEARCH RESULTS PANEL (Inline within workspace — no z-index clashes with Cart!) */}
+            {!isProductsLoading && searchQuery.trim() && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 overflow-hidden animate-wms-fade">
+                <div className="px-3.5 py-1.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-[11px] font-bold text-slate-600">
+                  <span>
+                    {searchResults.length > 0
+                      ? `${searchResults.length} risultati trovati`
+                      : 'Nessun risultato'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="min-h-[36px] px-2.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:text-slate-900 hover:bg-slate-50 font-extrabold transition touch-manipulation"
+                  >
+                    Chiudi risultati
+                  </button>
+                </div>
+
+                {searchResults.length === 0 ? (
+                  <EmptyState
+                    icon={Search}
+                    compact
+                    title={`Nessun articolo trovato per "${searchQuery}"`}
+                    description="Controlla il codice oppure aggiungi una riga descrittiva libera al carico."
+                    action={
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDescriptionDraft(searchQuery.trim());
+                          setShowDescriptionEditor(true);
+                          if (typeof window !== 'undefined' && window.innerWidth < 1280) {
+                            setIsCartDrawerOpen(true);
+                          }
+                          setSearchQuery('');
+                        }}
+                        className="min-h-[44px] px-4 rounded-xl bg-slate-900 text-white text-xs font-extrabold inline-flex items-center gap-2 hover:bg-slate-800 transition touch-manipulation"
+                      >
+                        <AlignLeft className="w-4 h-4 text-red-400" />
+                        <span>Usa &ldquo;{searchQuery.trim()}&rdquo; come Nota</span>
+                      </button>
+                    }
+                  />
+                ) : (
+                  <div className="divide-y divide-slate-200/80 max-h-[54vh] overflow-y-auto overscroll-contain bg-white">
+                    {searchResults.map(prod => {
+                      const inCartQty = cartQuantitiesByCode[prod.code];
+                      return (
+                        <button
+                          key={prod.code}
+                          type="button"
+                          onClick={() => handleAddProduct(prod)}
+                          className="w-full p-3 sm:p-3.5 text-left hover:bg-slate-50 active:bg-slate-100 transition flex items-center justify-between gap-3 min-h-[64px] touch-manipulation"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                              <span className="font-mono font-black text-xs bg-slate-900 text-white px-2 py-0.5 rounded">
+                                <HighlightMatch text={prod.code} query={deferredSearchQuery} />
+                              </span>
+                              <span className="text-[11px] font-mono font-extrabold bg-slate-100 text-slate-800 border border-slate-200 px-2 py-0.5 rounded uppercase">
+                                {prod.unit_of_measure}
+                              </span>
+                              {prod.alternative_code && (
+                                <span className="text-[11px] text-slate-500 font-mono">
+                                  Alt:{' '}
+                                  <HighlightMatch
+                                    text={prod.alternative_code}
+                                    query={deferredSearchQuery}
+                                  />
+                                </span>
+                              )}
+                              {inCartQty !== undefined && (
+                                <span className="text-[10px] font-mono font-black bg-emerald-100 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded-full">
+                                  NEL CARICO: {inCartQty}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-sm font-bold text-slate-900 whitespace-normal break-words leading-snug">
+                              <HighlightMatch text={prod.description} query={deferredSearchQuery} />
+                            </div>
+                          </div>
+
+                          <div className="shrink-0 flex items-center gap-1.5 px-3.5 h-11 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-xs">
+                            <Plus className="w-4 h-4 stroke-[3]" />
+                            <span className="hidden sm:inline">AGGIUNGI</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* LAST 8 RECENT PRODUCTS QUICK STRIP / GRID */}
+            {!searchQuery.trim() && recentProducts.length > 0 && (
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wider text-slate-500">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Ultimi {recentProducts.length} Articoli Utilizzati · Tocco Rapido</span>
                   </span>
                 </div>
-                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-0.5">
+
+                {/* Horizontal strip on mobile, multi-column responsive grid on tablet/desktop */}
+                <div className="flex md:grid md:grid-cols-2 lg:grid-cols-4 gap-2 overflow-x-auto md:overflow-visible snap-x snap-mandatory no-scrollbar pb-1 md:pb-0">
                   {recentProducts.map(prod => {
                     const inCartQty = cartQuantitiesByCode[prod.code];
                     return (
@@ -1012,644 +1237,259 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
                         key={prod.code}
                         type="button"
                         onClick={() => handleAddProduct(prod)}
-                        className={`shrink-0 h-9 px-2.5 rounded-lg border text-left flex items-center gap-1.5 text-xs transition active:scale-95 touch-manipulation ${
-                          inCartQty
-                            ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
-                            : 'bg-slate-50 border-slate-200 hover:border-slate-300 text-slate-800'
+                        className={`w-[236px] sm:w-[250px] md:w-auto shrink-0 snap-start min-h-[54px] p-2.5 rounded-xl border text-left flex items-center justify-between gap-2 transition active:scale-[0.98] touch-manipulation ${
+                          inCartQty !== undefined
+                            ? 'bg-emerald-50/80 border-emerald-300 text-emerald-950'
+                            : 'bg-slate-50/90 border-slate-200 hover:border-slate-300 hover:bg-white text-slate-900'
                         }`}
                       >
-                        <Plus className="w-3.5 h-3.5 text-red-600 shrink-0 stroke-[2.5]" />
-                        <span className="font-mono font-black text-[11px]">{prod.code}</span>
-                        <span className="font-semibold text-[11px] max-w-[140px] truncate text-slate-600">
-                          {prod.description}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono font-black text-[11px] text-slate-900">
+                              {prod.code}
+                            </span>
+                            <span className="text-[10px] font-mono font-bold text-slate-500 uppercase">
+                              {prod.unit_of_measure}
+                            </span>
+                            {inCartQty !== undefined && (
+                              <span className="px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-mono text-[10px] font-black tabular-nums">
+                                {inCartQty}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs font-semibold text-slate-600 truncate mt-0.5">
+                            {prod.description}
+                          </div>
+                        </div>
+                        <span className="w-8 h-8 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-red-600 shrink-0 shadow-2xs">
+                          <Plus className="w-4 h-4 stroke-[2.75]" />
                         </span>
-                        {inCartQty !== undefined && (
-                          <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-emerald-600 text-white font-mono text-[10px] font-black">
-                            {inCartQty}
-                          </span>
-                        )}
                       </button>
                     );
                   })}
                 </div>
               </div>
             )}
+          </section>
 
-            {isProductsLoading && (
-              <div className="mt-2.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-center text-xs font-semibold text-slate-700">
-                Caricamento del catalogo articoli da Supabase in corso...
-              </div>
-            )}
+          {/* MOBILE & TABLET INLINE CART SECTION (< 1200px) */}
+          <div className="xl:hidden">
+            <WarehouseCartPanel variant="inline" {...cartPanelProps} />
           </div>
+        </div>
 
-          {/* Search Instant Results Dropdown Panel */}
-          {!isProductsLoading && searchQuery.trim() && (
-            <div className="absolute left-0 right-0 top-full mt-2 z-40 bg-white rounded-2xl shadow-2xl border-2 border-slate-900/15 max-h-[60vh] overflow-y-auto divide-y divide-slate-100">
-              {searchResults.length === 0 ? (
-                <div className="p-8 text-center">
-                  <p className="text-sm font-bold text-slate-700">
-                    Nessun articolo trovato per "{searchQuery}"
-                  </p>
-                  <p className="text-xs text-slate-400 mt-1">
-                    Verifica il codice o usa il pulsante "Riga descrittiva" per inserire una nota manuale.
-                  </p>
-                </div>
-              ) : (
-                searchResults.map(prod => {
-                  const inCartQty = cartQuantitiesByCode[prod.code];
-                  return (
-                    <button
-                      key={prod.code}
-                      type="button"
-                      onClick={() => handleAddProduct(prod)}
-                      className="w-full p-3.5 sm:p-4 text-left hover:bg-slate-50 active:bg-slate-100 transition flex items-center justify-between gap-3 min-h-[64px] touch-manipulation"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2 mb-1">
-                          <span className="font-mono font-black text-xs bg-slate-900 text-white px-2 py-0.5 rounded">
-                            {prod.code}
-                          </span>
-                          <span className="text-[11px] font-mono font-extrabold bg-slate-100 text-slate-800 border border-slate-200 px-2 py-0.5 rounded uppercase">
-                            {prod.unit_of_measure}
-                          </span>
-                          {prod.alternative_code && (
-                            <span className="text-[11px] text-slate-500 font-mono">
-                              Alt: {prod.alternative_code}
-                            </span>
-                          )}
-                          {inCartQty !== undefined && (
-                            <span className="text-[10px] font-mono font-black bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
-                              NEL CARICO: {inCartQty}
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-sm font-bold text-slate-900 whitespace-normal break-words leading-snug">
-                          {prod.description}
-                        </div>
-                      </div>
-
-                      <div className="shrink-0 flex items-center gap-1.5 px-3.5 h-11 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-xs shadow-sm active:scale-95 transition">
-                        <Plus className="w-4 h-4 stroke-[3]" />
-                        <span className="hidden sm:inline">AGGIUNGI</span>
-                      </div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* STEP 3: CURRENT ORDER LINES */}
-        <section className="bg-white rounded-2xl border border-slate-200/90 shadow-xs overflow-hidden min-h-[260px]">
-          <div className="px-4 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5">
-              <span className="w-6 h-6 rounded-md bg-slate-900 text-white font-mono text-xs font-black flex items-center justify-center">
-                3
-              </span>
-              <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 uppercase tracking-wider">
-                Distinta Materiali Caricati ({totalLines})
-              </h2>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setShowDescriptionEditor(value => !value)}
-                className="min-h-[38px] inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-1.5 text-xs font-extrabold text-slate-800 hover:bg-slate-100 active:scale-95 transition touch-manipulation shadow-2xs"
-              >
-                <AlignLeft className="w-3.5 h-3.5 text-red-600" />
-                <span>+ Riga Descrittiva</span>
-              </button>
-
-              {totalLines > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setCart([])}
-                  className="min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-bold text-red-600 hover:bg-red-50 active:scale-95 transition touch-manipulation"
-                >
-                  Svuota
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="p-4 sm:p-5">
-            {showDescriptionEditor && (
-              <div className="mb-4 rounded-xl border-2 border-slate-900/15 bg-slate-50 p-4 space-y-3">
-                <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-800">
-                  Nota / Riga Descrittiva Libera
-                </label>
-                <textarea
-                  value={descriptionDraft}
-                  onChange={e => setDescriptionDraft(e.target.value)}
-                  rows={2}
-                  maxLength={500}
-                  autoFocus
-                  placeholder="Es. Scarico con gru lato cantiere nord / Bancali a rendere..."
-                  className="w-full resize-y rounded-xl border border-slate-300 bg-white p-3 text-sm font-medium text-slate-900 outline-none focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10"
-                />
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-mono text-slate-500">
-                    {descriptionDraft.length}/500 caratteri
-                  </span>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowDescriptionEditor(false);
-                        setDescriptionDraft('');
-                      }}
-                      className="min-h-[40px] rounded-xl px-4 py-2 text-xs font-bold text-slate-600 hover:bg-white border border-transparent hover:border-slate-200"
-                    >
-                      Annulla
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleAddDescriptionLine}
-                      disabled={!descriptionDraft.trim()}
-                      className="min-h-[40px] rounded-xl bg-slate-900 px-4 py-2 text-xs font-extrabold text-white disabled:opacity-40"
-                    >
-                      Inserisci Nota
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {cart.length === 0 ? (
-              <div className="py-12 flex flex-col items-center justify-center text-center text-slate-400">
-                <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center mb-3 text-slate-400">
-                  <Package className="w-7 h-7 stroke-[1.75]" />
-                </div>
-                <p className="text-sm font-extrabold text-slate-700">Nessun materiale inserito</p>
-                <p className="text-xs text-slate-400 max-w-sm mt-1">
-                  Seleziona il tipo documento in alto e cerca gli articoli caricati per comporre l'ordine da inviare all'ufficio.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {cart.map((item, idx) => (
-                  <div
-                    key={item.id}
-                    className={`p-3.5 sm:p-4 border-2 rounded-xl transition ${
-                      item.isDescription
-                        ? 'bg-amber-50/70 border-amber-200'
-                        : 'bg-white border-slate-200 hover:border-slate-300'
-                    }`}
-                  >
-                    {item.isDescription ? (
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <span className="inline-flex items-center gap-1 rounded-md bg-amber-200/80 px-2 py-0.5 text-[10px] font-mono font-black uppercase tracking-wide text-amber-950 mb-1.5">
-                            <AlignLeft className="w-3 h-3" /> NOTA DESCRITTIVA
-                          </span>
-                          <p className="whitespace-pre-wrap break-words text-sm font-semibold text-slate-900">
-                            {item.description}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveItem(item.id)}
-                          className="w-11 h-11 shrink-0 flex items-center justify-center rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 transition touch-manipulation"
-                          title="Elimina nota"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    ) : item.product ? (
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
-                        {/* Left: Product Metadata & Unit Switcher */}
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2 mb-1">
-                            <span className="text-[11px] font-mono font-bold text-slate-400">
-                              #{idx + 1}
-                            </span>
-                            <span className="font-mono font-black text-xs bg-slate-900 text-white px-2.5 py-0.5 rounded">
-                              {item.product.code}
-                            </span>
-                            {item.product.alternative_code && (
-                              <span className="text-[11px] text-slate-500 font-mono bg-slate-100 px-2 py-0.5 rounded">
-                                {item.product.alternative_code}
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="text-sm sm:text-base font-extrabold text-slate-900 leading-snug break-words">
-                            {item.product.description}
-                          </div>
-
-                          {/* Unit of Measure Selector Pills */}
-                          <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
-                            <span className="text-[10px] font-mono font-extrabold uppercase text-slate-400 mr-1">
-                              U.M.:
-                            </span>
-                            {[
-                              ...new Set([
-                                item.product.unit_of_measure,
-                                ...(unitOptions[item.product.id] || []),
-                              ]),
-                            ].map(unit => {
-                              const isSelectedUnit =
-                                (item.unitOfMeasure || item.product!.unit_of_measure) === unit;
-                              return (
-                                <button
-                                  key={unit}
-                                  type="button"
-                                  onClick={() =>
-                                    setCart(prev =>
-                                      prev.map(row =>
-                                        row.id === item.id ? { ...row, unitOfMeasure: unit } : row
-                                      )
-                                    )
-                                  }
-                                  className={`min-h-[34px] px-3 rounded-lg border text-xs font-mono font-black transition touch-manipulation ${
-                                    isSelectedUnit
-                                      ? 'border-slate-900 bg-slate-900 text-white shadow-2xs'
-                                      : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-white'
-                                  }`}
-                                >
-                                  {unit}
-                                </button>
-                              );
-                            })}
-
-                            <div className="inline-flex items-center gap-1 ml-1">
-                              <input
-                                value={newUnitDraft[item.product.id] || ''}
-                                onChange={e =>
-                                  setNewUnitDraft(prev => ({
-                                    ...prev,
-                                    [item.product!.id]: e.target.value,
-                                  }))
-                                }
-                                placeholder="+ U.M."
-                                aria-label="Nuova unità di misura"
-                                className="w-20 min-h-[34px] rounded-lg border border-slate-200 bg-slate-50 px-2.5 text-xs font-mono font-bold uppercase focus:bg-white focus:border-slate-900 outline-none"
-                              />
-                              {(newUnitDraft[item.product.id] || '').trim() && (
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    const productId = item.product!.id;
-                                    const unit = (newUnitDraft[productId] || '')
-                                      .trim()
-                                      .toUpperCase();
-                                    if (!unit) return;
-                                    try {
-                                      await saveProductUnitOption(productId, unit);
-                                      setUnitOptions(prev => ({
-                                        ...prev,
-                                        [productId]: [
-                                          ...new Set([...(prev[productId] || []), unit]),
-                                        ],
-                                      }));
-                                      setCart(prev =>
-                                        prev.map(row =>
-                                          row.id === item.id ? { ...row, unitOfMeasure: unit } : row
-                                        )
-                                      );
-                                      setNewUnitDraft(prev => ({ ...prev, [productId]: '' }));
-                                    } catch (error) {
-                                      setSubmitError(
-                                        error instanceof Error
-                                          ? error.message
-                                          : 'Unità non salvata'
-                                      );
-                                    }
-                                  }}
-                                  className="min-h-[34px] px-3 rounded-lg bg-red-600 text-white text-xs font-extrabold touch-manipulation"
-                                >
-                                  Salva
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Right: Large Touch Stepper Controls (Optimized for Portrait Tablet & Smartphone) */}
-                        <div className="flex items-center justify-between sm:justify-end gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100 shrink-0">
-                          <div className="flex items-center gap-1.5">
-                            {/* Stepper - */}
-                            <button
-                              type="button"
-                              onClick={() => handleQuantityDelta(item.product!.code, -1)}
-                              className="w-12 h-12 flex items-center justify-center rounded-xl bg-slate-100 border border-slate-300 text-slate-900 hover:bg-slate-200 active:scale-90 transition font-black touch-manipulation"
-                              aria-label="Diminuisci quantità"
-                            >
-                              <Minus className="w-5 h-5 stroke-[3]" />
-                            </button>
-
-                            {/* Quantity Display Button (Opens Touch Numpad) */}
-                            <button
-                              type="button"
-                              onClick={() => handleOpenQuantityPad(item)}
-                              className="h-12 min-w-[5.5rem] px-3 bg-white border-2 border-slate-900 rounded-xl flex items-center justify-center gap-1.5 hover:bg-slate-50 active:scale-95 transition touch-manipulation"
-                              title="Tocca per aprire il tastierino numerico"
-                            >
-                              <span className="font-mono font-black text-lg text-slate-900 tabular-nums">
-                                {item.quantity}
-                              </span>
-                              <span className="text-[11px] font-mono font-extrabold text-red-600 uppercase">
-                                {item.unitOfMeasure || item.product.unit_of_measure}
-                              </span>
-                            </button>
-
-                            {/* Stepper + */}
-                            <button
-                              type="button"
-                              onClick={() => handleQuantityDelta(item.product!.code, 1)}
-                              className="w-12 h-12 flex items-center justify-center rounded-xl bg-slate-900 text-white hover:bg-slate-800 active:scale-90 transition font-black shadow-xs touch-manipulation"
-                              aria-label="Aumenta quantità"
-                            >
-                              <Plus className="w-5 h-5 stroke-[3]" />
-                            </button>
-                          </div>
-
-                          {/* Delete row */}
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveItem(item.id)}
-                            className="w-11 h-12 flex items-center justify-center rounded-xl text-slate-400 hover:text-red-600 hover:bg-red-50 active:scale-90 transition touch-manipulation"
-                            title="Rimuovi articolo"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
+        {/* DESKTOP PERSISTENT RIGHT CART RAIL (>= 1200px) */}
+        <aside className="hidden xl:block w-[390px] 2xl:w-[430px] shrink-0 sticky top-[5.25rem] h-[calc(100dvh-6.25rem)]">
+          <WarehouseCartPanel variant="rail" {...cartPanelProps} />
+        </aside>
       </div>
 
-      {/* FIXED BOTTOM COMMAND BAR (THUMB ZONE FOR PHONE & TABLET PORTRAIT) */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 bg-[#0b0f19]/95 backdrop-blur-md border-t border-slate-800 p-3 sm:px-6 sm:py-3.5 shadow-2xl pb-safe">
-        <div className="max-w-4xl mx-auto flex items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div>
-              <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-widest block">
-                RIEPILOGO CARICO
+      {/* MOBILE / TABLET STICKY DOCKED SUMMARY & SUBMIT CTA (< 1200px) */}
+      <div className="xl:hidden wms-hide-on-mobile-typing fixed left-0 right-0 bottom-[calc(64px+env(safe-area-inset-bottom,0px))] md:bottom-0 z-30 px-2.5 sm:px-3 pb-2 md:pb-3 pointer-events-none no-print">
+        <div className="max-w-4xl mx-auto bg-[#0b0f19]/95 backdrop-blur-md border border-slate-800 rounded-2xl p-2 sm:px-4 shadow-2xl pointer-events-auto flex items-center justify-between gap-1.5 sm:gap-2.5">
+          <button
+            type="button"
+            onClick={() => setIsCartDrawerOpen(true)}
+            className="flex items-center gap-2 min-h-[46px] px-1.5 sm:px-2 rounded-xl hover:bg-white/10 text-left transition touch-manipulation min-w-0 shrink"
+          >
+            <div className="relative w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-slate-800 flex items-center justify-center shrink-0">
+              <ShoppingCart className="w-4 h-4 text-white" />
+              {totalLines > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1 rounded-full bg-red-600 text-white font-mono text-[10px] font-black flex items-center justify-center tabular-nums">
+                  {totalLines}
+                </span>
+              )}
+            </div>
+            <div className="min-w-0">
+              <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block leading-none">
+                Carrello
               </span>
-              <div className="flex items-baseline gap-2 text-white">
-                <span className="font-mono font-black text-base sm:text-lg tabular-nums">
-                  {productLinesCount}
-                </span>
-                <span className="text-xs text-slate-300 font-semibold">articoli</span>
-                <span className="text-slate-600">·</span>
-                <span className="font-mono font-black text-base sm:text-lg text-red-400 tabular-nums">
-                  {totalUnits}
-                </span>
-                <span className="text-xs text-slate-300 font-semibold">unità tot.</span>
+              <div className="text-[11px] sm:text-sm font-black text-white font-mono tabular-nums whitespace-nowrap mt-1">
+                {productLinesCount} art. · {totalUnits}
+                <span className="hidden min-[380px]:inline"> un.</span>
               </div>
             </div>
-          </div>
+          </button>
 
           <button
             type="button"
             onClick={() => setShowConfirmModal(true)}
             disabled={cart.length === 0 || isSubmitting || !documentType}
-            className="flex-1 max-w-md h-13 sm:h-14 rounded-xl bg-red-600 hover:bg-red-500 active:scale-[0.99] disabled:opacity-35 disabled:hover:bg-red-600 text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-red-600/25 transition tracking-wide touch-manipulation"
+            className="shrink-0 sm:min-w-[220px] h-12 px-3 sm:px-5 rounded-xl bg-red-600 hover:bg-red-500 active:scale-[0.98] disabled:opacity-35 text-white font-extrabold text-[11px] sm:text-sm flex items-center justify-center gap-1.5 sm:gap-2 shadow-lg shadow-red-600/25 transition uppercase tracking-wide touch-manipulation"
           >
-            <Send className="w-4 h-4" />
-            <span className="whitespace-nowrap uppercase">TRASMETTI ORDINE ALL'UFFICIO</span>
+            <Send className="w-4 h-4 shrink-0" />
+            <span className="whitespace-nowrap">
+              {editingOrder ? 'Aggiorna' : 'Trasmetti Ordine'}
+            </span>
           </button>
         </div>
       </div>
 
-      {/* TOUCH QUANTITY KEYPAD MODAL (IDEAL FOR WINDOWS TABLET & MOBILE) */}
-      {editingItem?.product && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-xs p-3 sm:p-4">
-          <div className="w-full max-w-md bg-white rounded-2xl p-5 shadow-2xl border border-slate-200">
-            <div className="flex items-start justify-between pb-3 border-b border-slate-200 mb-3">
-              <div className="min-w-0 pr-2">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono font-bold text-xs bg-slate-900 text-white px-2 py-0.5 rounded">
-                    {editingItem.product.code}
-                  </span>
-                  <span className="text-xs font-mono font-bold text-red-600 uppercase">
-                    U.M.: {editingItem.unitOfMeasure || editingItem.product.unit_of_measure}
-                  </span>
-                </div>
-                <h4 className="text-xs sm:text-sm font-extrabold text-slate-900 line-clamp-1 mt-1">
-                  {editingItem.product.description}
-                </h4>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEditingItem(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* MOBILE BOTTOM SHEET / TABLET DRAWER FOR CART (< 1200px) */}
+      {isCartDrawerOpen && (
+        <div
+          className="xl:hidden fixed inset-0 z-[65] bg-slate-950/70 backdrop-blur-[2px] flex items-end md:items-stretch md:justify-end animate-wms-fade no-print"
+          onClick={() => setIsCartDrawerOpen(false)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            className="w-full md:w-[430px] h-[88dvh] md:h-full bg-white rounded-t-2xl md:rounded-none shadow-2xl overflow-hidden animate-wms-slide-up md:animate-wms-slide-left flex flex-col"
+          >
+            <WarehouseCartPanel
+              variant="drawer"
+              onCloseDrawer={() => setIsCartDrawerOpen(false)}
+              {...cartPanelProps}
+            />
+          </div>
+        </div>
+      )}
 
-            {/* Numeric Display / Direct Input */}
-            <div className="mb-3">
-              <div className="relative">
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={keypadValue}
-                  onChange={(e) => {
-                    setKeypadFreshOpen(false);
-                    setKeypadValue(e.target.value);
-                  }}
-                  className="w-full h-14 text-center font-mono font-black text-3xl bg-slate-900 text-white rounded-xl focus:outline-none focus:ring-2 focus:ring-red-600 transition tabular-nums"
-                />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 font-mono font-black text-xs text-slate-400 uppercase">
-                  {editingItem.unitOfMeasure || editingItem.product.unit_of_measure}
-                </span>
-              </div>
-            </div>
+      {/* TOUCH QUANTITY KEYPAD MODAL */}
+      <TouchNumpadModal
+        isOpen={Boolean(editingItem?.product)}
+        product={editingItem?.product || null}
+        initialQuantity={editingItem?.quantity || 1}
+        unitOfMeasure={
+          editingItem?.unitOfMeasure || editingItem?.product?.unit_of_measure || 'PZ'
+        }
+        onClose={() => setEditingItem(null)}
+        onConfirm={handleSaveQuantityPad}
+        onTriggerHaptic={triggerHaptic}
+      />
 
-            {/* Quick Delta Presets */}
-            <div className="grid grid-cols-4 gap-1.5 mb-2.5">
-              {[1, 5, 10, 25].map(delta => (
-                <button
-                  key={delta}
-                  type="button"
-                  onClick={() => handleApplyPreset(delta)}
-                  className="h-10 rounded-lg bg-slate-100 hover:bg-slate-200 font-mono font-extrabold text-xs text-slate-800 active:scale-95 transition touch-manipulation"
-                >
-                  +{delta}
-                </button>
-              ))}
-            </div>
+      {/* CONFIRM CLEAR CART DIALOG */}
+      <ConfirmDialog
+        isOpen={showClearCartConfirm}
+        onCancel={() => setShowClearCartConfirm(false)}
+        onConfirm={handleConfirmClearCart}
+        title="Svuotare la distinta di carico?"
+        description={`Verranno rimosse tutte le ${cart.length} righe attualmente inserite nel carrello. L'operazione non può essere annullata.`}
+        confirmLabel="Svuota Carrello"
+        cancelLabel="Mantieni Articoli"
+        tone="danger"
+      />
 
-            {/* Tactile On-Screen Numpad for Tablet & Touch */}
-            <div className="grid grid-cols-3 gap-2 mb-4">
-              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(digit => (
-                <button
-                  key={digit}
-                  type="button"
-                  onClick={() => handleNumpadDigit(digit)}
-                  className="h-12 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 active:bg-slate-200 font-mono font-black text-lg text-slate-900 transition touch-manipulation"
-                >
-                  {digit}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => handleNumpadDigit(',')}
-                className="h-12 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 font-mono font-black text-lg text-slate-900 transition touch-manipulation"
-              >
-                ,
-              </button>
-              <button
-                type="button"
-                onClick={() => handleNumpadDigit('0')}
-                className="h-12 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 font-mono font-black text-lg text-slate-900 transition touch-manipulation"
-              >
-                0
-              </button>
-              <button
-                type="button"
-                onClick={handleNumpadBackspace}
-                className="h-12 rounded-xl border border-slate-200 bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-700 transition touch-manipulation"
-                aria-label="Cancella cifra"
-              >
-                <Delete className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Confirm button */}
+      {/* CONFIRMATION MODAL BEFORE ORDER SUBMIT */}
+      <ResponsiveSheetModal
+        isOpen={showConfirmModal}
+        onClose={() => setShowConfirmModal(false)}
+        maxWidthClass="sm:max-w-lg"
+        headerTone="dark"
+        title={editingOrder ? `Aggiorna Ordine ${editingOrder.order_number}` : 'Conferma Trasmissione Ordine'}
+        subtitle="Verifica intestazione e distinta materiali prima dell'invio"
+        footer={
+          <div className="flex items-center gap-2.5">
             <button
               type="button"
-              onClick={handleSaveQuantityPad}
-              className="w-full h-12 bg-red-600 hover:bg-red-700 text-white rounded-xl font-extrabold text-sm flex items-center justify-center gap-2 shadow-md active:scale-98 transition touch-manipulation"
+              onClick={() => setShowConfirmModal(false)}
+              className="flex-1 min-h-[48px] rounded-xl border border-slate-300 bg-white text-slate-800 font-bold text-xs sm:text-sm hover:bg-slate-100 active:scale-[0.98] transition touch-manipulation"
             >
-              <Check className="w-4 h-4 stroke-[3]" />
-              <span>IMPOSTA QUANTITÀ</span>
+              Torna al Carico
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmSubmit}
+              disabled={isSubmitting}
+              className="flex-1 min-h-[48px] rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-red-600/20 active:scale-[0.98] transition uppercase touch-manipulation"
+            >
+              <Send className="w-4 h-4 shrink-0" />
+              <span>
+                {isSubmitting
+                  ? 'Trasmissione...'
+                  : editingOrder
+                  ? 'Aggiorna Ordine'
+                  : 'Conferma e Invia'}
+              </span>
             </button>
           </div>
-        </div>
-      )}
-
-      {/* CONFIRMATION MODAL BEFORE SENDING */}
-      {showConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
-          <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-4 sm:p-5 bg-[#0b0f19] text-white flex items-center justify-between border-b border-slate-800">
-              <div className="flex items-center gap-2.5">
-                <Send className="w-4 h-4 text-red-500" />
-                <h3 className="font-extrabold text-sm sm:text-base text-white">
-                  Conferma Trasmissione Ordine
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowConfirmModal(false)}
-                className="text-slate-400 hover:text-white p-1"
-              >
-                <X className="w-5 h-5" />
-              </button>
+        }
+      >
+        <div className="p-4 sm:p-5 space-y-4">
+          <div className="grid grid-cols-2 gap-2.5 bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs">
+            <div>
+              <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">
+                Punto di Carico
+              </span>
+              <span className="font-extrabold text-slate-900">
+                {warehouseLocation === 'DEPOSITO' ? 'Deposito' : 'Magazzino'}
+              </span>
             </div>
-
-            <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-4">
-              <div className="grid grid-cols-2 gap-2.5 bg-slate-50 p-3.5 rounded-xl border border-slate-200 text-xs">
-                <div>
-                  <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">
-                    Punto di Carico
-                  </span>
-                  <span className="font-extrabold text-slate-900">
-                    {warehouseLocation === 'DEPOSITO' ? 'Deposito' : 'Magazzino'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">
-                    Documento
-                  </span>
-                  <span className="font-extrabold text-red-600">
-                    {documentType ? ORDER_DOCUMENT_LABELS[documentType] : 'DDT'}
-                  </span>
-                </div>
-                {customerReference && (
-                  <div className="col-span-2 pt-2 border-t border-slate-200/80">
-                    <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">
-                      Cliente / Riferimento Cantiere
-                    </span>
-                    <span className="font-extrabold text-slate-900">{customerReference}</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
-                Articoli in distinta ({cart.length}):
-              </div>
-
-              <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
-                {cart.map(item => (
-                  <div
-                    key={item.id}
-                    className="p-3 flex items-center justify-between gap-2 text-xs bg-white"
-                  >
-                    {item.isDescription ? (
-                      <div className="min-w-0">
-                        <span className="mr-2 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-mono font-black uppercase text-amber-900">
-                          Nota
-                        </span>
-                        <span className="whitespace-pre-wrap break-words text-slate-800 font-medium">
-                          {item.description}
-                        </span>
-                      </div>
-                    ) : item.product ? (
-                      <>
-                        <div className="min-w-0 flex-1 pr-2">
-                          <span className="font-mono font-bold text-[11px] bg-slate-100 text-slate-900 px-1.5 py-0.5 rounded mr-2">
-                            {item.product.code}
-                          </span>
-                          <span className="font-semibold text-slate-800">
-                            {item.product.description}
-                          </span>
-                        </div>
-                        <div className="font-mono font-black text-slate-900 whitespace-nowrap text-sm tabular-nums">
-                          {item.quantity} {item.unitOfMeasure || item.product.unit_of_measure}
-                        </div>
-                      </>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-
-              {submitError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-bold text-red-600 flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{submitError}</span>
-                </div>
-              )}
+            <div>
+              <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">
+                Documento
+              </span>
+              <span className="font-extrabold text-red-600">
+                {documentType ? ORDER_DOCUMENT_LABELS[documentType] : 'DDT'}
+              </span>
             </div>
-
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setShowConfirmModal(false)}
-                className="flex-1 h-12 rounded-xl border border-slate-300 bg-white text-slate-700 font-bold text-xs hover:bg-slate-100 active:scale-95 transition touch-manipulation"
-              >
-                Torna al Carico
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmSubmit}
-                disabled={isSubmitting}
-                className="flex-1 h-12 rounded-xl bg-red-600 hover:bg-red-700 text-white font-black text-xs flex items-center justify-center gap-2 shadow-md shadow-red-600/20 active:scale-95 transition uppercase touch-manipulation"
-              >
-                {isSubmitting ? (
-                  <span>Trasmissione...</span>
-                ) : (
-                  <>
-                    <Send className="w-4 h-4" />
-                    <span>{editingOrder ? 'Aggiorna Ordine' : 'Conferma e Invia'}</span>
-                  </>
-                )}
-              </button>
-            </div>
+            {customerReference && (
+              <div className="col-span-2 pt-2 border-t border-slate-200/80">
+                <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">
+                  Cliente / Riferimento Cantiere
+                </span>
+                <span className="font-extrabold text-slate-900">{customerReference}</span>
+              </div>
+            )}
           </div>
+
+          <div className="flex items-center justify-between text-xs font-extrabold uppercase tracking-wider text-slate-500">
+            <span>Distinta Materiali ({cart.length})</span>
+            <span className="font-mono text-slate-900">{totalUnits} unità tot.</span>
+          </div>
+
+          <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
+            {cart.map(item => (
+              <div
+                key={item.id}
+                className="p-3 flex items-center justify-between gap-2 text-xs bg-white"
+              >
+                {item.isDescription ? (
+                  <div className="min-w-0">
+                    <span className="mr-2 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-mono font-black uppercase text-amber-900">
+                      Nota
+                    </span>
+                    <span className="whitespace-pre-wrap break-words text-slate-800 font-medium">
+                      {item.description}
+                    </span>
+                  </div>
+                ) : item.product ? (
+                  <>
+                    <div className="min-w-0 flex-1 pr-2">
+                      <span className="font-mono font-bold text-[11px] bg-slate-100 text-slate-900 px-1.5 py-0.5 rounded mr-2">
+                        {item.product.code}
+                      </span>
+                      <span className="font-semibold text-slate-800">
+                        {item.product.description}
+                      </span>
+                    </div>
+                    <div className="font-mono font-black text-slate-900 whitespace-nowrap text-sm tabular-nums">
+                      {item.quantity} {item.unitOfMeasure || item.product.unit_of_measure}
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            ))}
+          </div>
+
+          {!isOnline && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs font-bold text-amber-900 flex items-center gap-2">
+              <WifiOff className="w-4 h-4 shrink-0 text-amber-600" />
+              <span>
+                Sei offline: l&apos;ordine sarà salvato localmente e sincronizzato appena torna internet.
+              </span>
+            </div>
+          )}
+
+          {submitError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-bold text-red-600 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{submitError}</span>
+            </div>
+          )}
         </div>
-      )}
+      </ResponsiveSheetModal>
 
       {/* Barcode & QR Code Camera Scanner Modal */}
       <BarcodeScannerModal
@@ -1660,4 +1500,3 @@ export const WarehouseView: React.FC<WarehouseViewProps> = ({
     </div>
   );
 };
-

@@ -7,8 +7,13 @@
     --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     --saggin-red: #dc2626;
     --saggin-red-dark: #b91c1c;
+    --velux-red: #e30613;
     --erp-navy: #0b0f19;
+    --erp-slate: #0f172a;
     --erp-surface: #f4f6f8;
+    --erp-card: #ffffff;
+    --erp-border: #e2e8f0;
+    --erp-accent-orange: #ea580c;
   }
 
   html {
@@ -22,6 +27,15 @@
     color: #0f172a;
     -webkit-tap-highlight-color: transparent;
     overflow-x: hidden;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid #dc2626;
+    outline-offset: 2px;
   }
 
   .font-mono, code, kbd, samp, pre {
@@ -78,6 +92,90 @@
 
 .touch-manipulation {
   touch-action: manipulation;
+}
+
+/* Industrial technical dot/grid surface for WMS auth & scanners */
+.wms-grid-bg {
+  background-image:
+    linear-gradient(to right, rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
+
+/* Snappy micro-animations for WMS drawers, toasts & scanner beam */
+@keyframes wms-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes wms-slide-left {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes wms-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes wms-scan-beam {
+  0%, 100% {
+    transform: translateY(8%);
+  }
+  50% {
+    transform: translateY(88%);
+  }
+}
+
+.animate-wms-slide-up {
+  animation: wms-slide-up 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-wms-slide-left {
+  animation: wms-slide-left 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-wms-fade {
+  animation: wms-fade-in 150ms ease-out;
+}
+
+.animate-wms-scan-beam {
+  animation: wms-scan-beam 2.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-wms-slide-up,
+  .animate-wms-slide-left,
+  .animate-wms-fade,
+  .animate-wms-scan-beam,
+  .animate-pulse,
+  .animate-ping,
+  .animate-bounce {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+@media (max-width: 767px) {
+  [data-mobile-typing="true"] .wms-hide-on-mobile-typing {
+    display: none !important;
+  }
 }
 
 /* Print layout for A4 orders */
