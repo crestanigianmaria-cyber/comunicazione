@@ -1120,3 +1120,70 @@ export async function printDymoCanvasesBatch(
 </html>`);
   doc.close();
 }
+
+export type DymoImageFormat = 'png' | 'jpg';
+
+/**
+ * Converts a rendered DYMO label canvas to a PNG or high-quality white-background JPG data URL.
+ */
+export function canvasToImageDataUrl(
+  canvas: HTMLCanvasElement,
+  format: DymoImageFormat
+): string {
+  if (format === 'png') {
+    return canvas.toDataURL('image/png');
+  }
+
+  const jpgCanvas = document.createElement('canvas');
+  jpgCanvas.width = canvas.width;
+  jpgCanvas.height = canvas.height;
+  const ctx = jpgCanvas.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, jpgCanvas.width, jpgCanvas.height);
+    ctx.drawImage(canvas, 0, 0);
+  }
+  return jpgCanvas.toDataURL('image/jpeg', 0.96);
+}
+
+/**
+ * Downloads a single DYMO label canvas as .png or .jpg for direct import into DYMO software.
+ */
+export function downloadCanvasAsImage(
+  canvas: HTMLCanvasElement,
+  filenameBase: string,
+  format: DymoImageFormat
+): void {
+  const safeBase = filenameBase.replace(/\.[^.]+$/, '');
+  const dataUrl = canvasToImageDataUrl(canvas, format);
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = `${safeBase}.${format}`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+/**
+ * Downloads one or more DYMO label canvases as .png or .jpg files.
+ */
+export async function downloadDymoCanvasesAsImages(
+  canvases: HTMLCanvasElement[],
+  filenameBase: string,
+  format: DymoImageFormat
+): Promise<void> {
+  if (canvases.length === 0) return;
+  if (canvases.length === 1) {
+    downloadCanvasAsImage(canvases[0], filenameBase, format);
+    return;
+  }
+
+  for (let i = 0; i < canvases.length; i++) {
+    const suffix = String(i + 1).padStart(2, '0');
+    downloadCanvasAsImage(canvases[i], `${filenameBase}_${suffix}`, format);
+    if (i < canvases.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 180));
+    }
+  }
+}
+

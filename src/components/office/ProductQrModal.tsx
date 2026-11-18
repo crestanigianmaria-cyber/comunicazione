@@ -12,9 +12,11 @@ import {
   printViaDymoWebService,
   printDymoViaBrowserDriver,
   renderProductDymoSheetCanvas,
+  downloadCanvasAsImage,
   DYMO_PRODUCT_LAYOUTS,
   DymoProductLayout,
   DymoOrientation,
+  DymoImageFormat,
 } from '../../lib/dymoPrinter';
 
 interface ProductQrModalProps {
@@ -142,7 +144,12 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
       const layoutInfo =
         DYMO_PRODUCT_LAYOUTS.find((l) => l.id === dymoLayout) || DYMO_PRODUCT_LAYOUTS[0];
       const items = Array.from({ length: layoutInfo.slotsPerLabel }, () => product);
-      const dymoCanvas = await renderProductDymoSheetCanvas(items, dymoLayout, '70x54');
+      const dymoCanvas = await renderProductDymoSheetCanvas(
+        items,
+        dymoLayout,
+        '70x54',
+        dymoOrientation
+      );
       const printers = await detectDymoPrinters();
       const activePrinter = printers.find((p) => p.isConnected) || printers[0];
       const labelCopies = Math.max(1, copiesCount);
@@ -156,12 +163,31 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
     }
   };
 
-  const handleDownloadPng = () => {
-    const src = printMode === 'DYMO' ? dymoPreviewUrl : dataUrl;
-    if (!src) return;
+  const handleDownloadImage = async (format: DymoImageFormat) => {
+    if (isBusy) return;
+    if (printMode === 'DYMO') {
+      setIsBusy(true);
+      try {
+        const layoutInfo =
+          DYMO_PRODUCT_LAYOUTS.find((l) => l.id === dymoLayout) || DYMO_PRODUCT_LAYOUTS[0];
+        const items = Array.from({ length: layoutInfo.slotsPerLabel }, () => product);
+        const canvas = await renderProductDymoSheetCanvas(
+          items,
+          dymoLayout,
+          '70x54',
+          dymoOrientation
+        );
+        downloadCanvasAsImage(canvas, `Etichetta_DYMO_${product.code}_${dymoLayout}`, format);
+      } finally {
+        setIsBusy(false);
+      }
+      return;
+    }
+
+    if (!dataUrl) return;
     const link = document.createElement('a');
-    link.href = src;
-    link.download = `QR_${product.code}_${printMode === 'DYMO' ? dymoLayout : 'singolo'}.png`;
+    link.href = dataUrl;
+    link.download = `QR_${product.code}_singolo.png`;
     link.click();
   };
 
@@ -456,14 +482,28 @@ export const ProductQrModal: React.FC<ProductQrModalProps> = ({
 
         {/* Footer actions */}
         <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={handleDownloadPng}
-            className="px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Scarica PNG</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handleDownloadImage('png')}
+              disabled={isBusy}
+              className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black flex items-center gap-1.5 shadow-sm transition cursor-pointer disabled:opacity-50"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Scarica PNG</span>
+            </button>
+            {printMode === 'DYMO' && (
+              <button
+                type="button"
+                onClick={() => handleDownloadImage('jpg')}
+                disabled={isBusy}
+                className="px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-black flex items-center gap-1.5 shadow-sm transition cursor-pointer disabled:opacity-50"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Scarica JPG</span>
+              </button>
+            )}
+          </div>
 
           {printMode === 'DYMO' ? (
             <button

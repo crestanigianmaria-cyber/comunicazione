@@ -18,8 +18,10 @@ import {
   DYMO_LABEL_FORMATS,
   DymoLabelSizeId,
   DymoPrinterInfo,
+  DymoImageFormat,
   detectDymoPrinters,
   renderCommitmentDymoCanvas,
+  downloadCanvasAsImage,
   printViaDymoWebService,
   printDymoViaBrowserDriver,
 } from '../../lib/dymoPrinter';
@@ -337,6 +339,20 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
       // Fallback to browser driver print dialog with exact DYMO page size
       const canvas = await renderCommitmentDymoCanvas(previewCommitment, dymoFormat);
       printDymoViaBrowserDriver(canvas, dymoFormat, packagesCount);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleDownloadDymoImage = async (format: DymoImageFormat) => {
+    if (!previewCommitment) return;
+    setIsExporting(true);
+    try {
+      const canvas = await renderCommitmentDymoCanvas(previewCommitment, dymoFormat);
+      const safeCustomer = (previewCommitment.customer_name || 'Cliente')
+        .replace(/[^a-zA-Z0-9_-]+/g, '_')
+        .slice(0, 30);
+      downloadCanvasAsImage(canvas, `Impegno_DYMO_${safeCustomer}_${dymoFormat}`, format);
     } finally {
       setIsExporting(false);
     }
@@ -1058,19 +1074,42 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
                 {/* Action Buttons */}
                 <div className="space-y-2 pt-1">
                   {printMode === 'DYMO' ? (
-                    <button
-                      type="button"
-                      disabled={isExporting}
-                      onClick={handlePrintDymoDirect}
-                      className="w-full py-3 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-sm shadow-md shadow-red-600/20 flex items-center justify-center gap-2"
-                    >
-                      <Tag className="w-4 h-4" />
-                      <span>
-                        {dymoPrinters.length > 0
-                          ? `Stampa Diretta su ${selectedDymoPrinter}`
-                          : 'Stampa su Stampante DYMO'}
-                      </span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        disabled={isExporting}
+                        onClick={handlePrintDymoDirect}
+                        className="w-full py-3 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-extrabold text-sm shadow-md shadow-red-600/20 flex items-center justify-center gap-2"
+                      >
+                        <Tag className="w-4 h-4" />
+                        <span>
+                          {dymoPrinters.length > 0
+                            ? `Stampa Diretta su ${selectedDymoPrinter}`
+                            : 'Stampa su Stampante DYMO'}
+                        </span>
+                      </button>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          disabled={isExporting}
+                          onClick={() => handleDownloadDymoImage('png')}
+                          className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer disabled:opacity-50"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Scarica PNG (DYMO)</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isExporting}
+                          onClick={() => handleDownloadDymoImage('jpg')}
+                          className="py-2.5 px-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-extrabold text-xs flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer disabled:opacity-50"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          <span>Scarica JPG (DYMO)</span>
+                        </button>
+                      </div>
+                    </>
                   ) : (
                     <>
                       <button

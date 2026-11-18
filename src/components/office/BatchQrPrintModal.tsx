@@ -31,9 +31,11 @@ import {
 import {
   renderProductDymoSheetCanvas,
   printDymoCanvasesBatch,
+  downloadDymoCanvasesAsImages,
   DYMO_PRODUCT_LAYOUTS,
   DymoProductLayout,
   DymoOrientation,
+  DymoImageFormat,
 } from '../../lib/dymoPrinter';
 
 interface BatchQrPrintModalProps {
@@ -79,6 +81,7 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [isPrintingDymo, setIsPrintingDymo] = useState(false);
+  const [isExportingDymoImage, setIsExportingDymoImage] = useState<DymoImageFormat | null>(null);
 
   // Stop mouse drag selection when mouse button is released anywhere
   useEffect(() => {
@@ -300,6 +303,28 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
     }
   };
 
+  const handleDownloadDymoImages = async (format: DymoImageFormat) => {
+    if (productsToPrint.length === 0 || isExportingDymoImage) return;
+    setIsExportingDymoImage(format);
+    try {
+      const slots = activeDymoLayout.slotsPerLabel;
+      const canvases: HTMLCanvasElement[] = [];
+      for (let i = 0; i < productsToPrint.length; i += slots) {
+        const chunk = productsToPrint.slice(i, i + slots);
+        const c = await renderProductDymoSheetCanvas(chunk, dymoLayout, '70x54', dymoOrientation);
+        canvases.push(c);
+      }
+      const dateStr = new Date().toISOString().slice(0, 10);
+      await downloadDymoCanvasesAsImages(
+        canvases,
+        `Etichetta_DYMO_${dymoLayout}_${productsToPrint.length}art_${dateStr}`,
+        format
+      );
+    } finally {
+      setIsExportingDymoImage(null);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-2 sm:p-3 select-none">
       <div className="bg-white w-full max-w-[1400px] h-[95vh] rounded-2xl shadow-2xl overflow-hidden border border-slate-300 flex flex-col">
@@ -333,7 +358,7 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
               </div>
               <p className="text-[11px] text-slate-400">
                 {printTarget === 'DYMO'
-                  ? 'QR ad alto contrasto con logo Saggin e descrizione articolo, pronti per stampa termica DYMO 70×54 mm'
+                  ? 'QR ad alto contrasto con logo Saggin e descrizione articolo, esportabili in PNG/JPG per DYMO o stampa diretta'
                   : 'Nome articolo sempre completo (zero tagli), logo Saggin integrato e griglia a taglio unico continuo per taglierina'}
               </p>
             </div>
@@ -375,19 +400,49 @@ export const BatchQrPrintModal: React.FC<BatchQrPrintModalProps> = ({
             </div>
 
             {printTarget === 'DYMO' ? (
-              <button
-                type="button"
-                onClick={handlePrintDymoBatch}
-                disabled={productsToPrint.length === 0 || isPrintingDymo}
-                className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 text-xs font-black flex items-center gap-2 transition shadow-md disabled:opacity-40 cursor-pointer"
-              >
-                <Printer className="w-4 h-4 stroke-[2.5]" />
-                <span>
-                  {isPrintingDymo
-                    ? 'Preparazione DYMO...'
-                    : `STAMPA ${totalPages} ${totalPages === 1 ? 'ETICHETTA' : 'ETICHETTE'} DYMO`}
-                </span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleDownloadDymoImages('png')}
+                  disabled={productsToPrint.length === 0 || isExportingDymoImage !== null}
+                  className="px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white text-xs font-black flex items-center gap-1.5 transition shadow-md shadow-emerald-600/20 disabled:opacity-40 cursor-pointer"
+                  title="Esporta l'etichetta DYMO in formato PNG per il software DYMO"
+                >
+                  <Download className="w-4 h-4 stroke-[2.5]" />
+                  <span>
+                    {isExportingDymoImage === 'png'
+                      ? 'Esportazione...'
+                      : `SCARICA PNG${totalPages > 1 ? ` (${totalPages})` : ''}`}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDownloadDymoImages('jpg')}
+                  disabled={productsToPrint.length === 0 || isExportingDymoImage !== null}
+                  className="px-3.5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 active:scale-95 text-white text-xs font-black flex items-center gap-1.5 transition shadow-md shadow-sky-600/20 disabled:opacity-40 cursor-pointer"
+                  title="Esporta l'etichetta DYMO in formato JPG per il software DYMO"
+                >
+                  <Download className="w-4 h-4 stroke-[2.5]" />
+                  <span>
+                    {isExportingDymoImage === 'jpg'
+                      ? 'Esportazione...'
+                      : `SCARICA JPG${totalPages > 1 ? ` (${totalPages})` : ''}`}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrintDymoBatch}
+                  disabled={productsToPrint.length === 0 || isPrintingDymo}
+                  className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-slate-950 text-xs font-black flex items-center gap-2 transition shadow-md disabled:opacity-40 cursor-pointer"
+                >
+                  <Printer className="w-4 h-4 stroke-[2.5]" />
+                  <span>
+                    {isPrintingDymo
+                      ? 'Preparazione DYMO...'
+                      : `STAMPA ${totalPages} ${totalPages === 1 ? 'ETICHETTA' : 'ETICHETTE'} DYMO`}
+                  </span>
+                </button>
+              </>
             ) : (
               <>
                 <button
