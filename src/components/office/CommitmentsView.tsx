@@ -296,7 +296,7 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
     const url = canvas.toDataURL('image/png');
     const link = document.createElement('a');
     link.href = url;
-    link.download = `QR_Impegno_${previewCommitment.commitment_number}_${previewCommitment.customer_name
+    link.download = `Impegno_${previewCommitment.commitment_number}_${previewCommitment.customer_name
       .replace(/[^a-zA-Z0-9_-]/g, '_')
       .slice(0, 24)}.png`;
     link.click();
@@ -840,10 +840,10 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
               }`}
             >
               <div className="flex items-center gap-3">
-                <QrCode className="w-6 h-6" />
+                <Tag className="w-6 h-6" />
                 <div>
                   <h3 className="text-base sm:text-lg font-extrabold">
-                    Etichetta QR Impegno N° {previewCommitment.commitment_number} ·{' '}
+                    Etichetta Impegno N° {previewCommitment.commitment_number} ·{' '}
                     {previewCommitment.customer_name}
                   </h3>
                   <p className="text-xs opacity-90">
@@ -872,7 +872,7 @@ export const CommitmentsView: React.FC<CommitmentsViewProps> = ({
                   previewDataUrl && (
                     <img
                       src={previewDataUrl}
-                      alt="Etichetta QR Impegno Cliente"
+                      alt="Etichetta Impegno Cliente"
                       className="max-w-full max-h-[380px] rounded-xl shadow-md border border-slate-300 bg-white object-contain"
                     />
                   )

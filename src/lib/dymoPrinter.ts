@@ -1,7 +1,7 @@
 import QRCode from 'qrcode';
 import { CustomerCommitment, Product } from '../types';
 import { loadSagginLogo } from './qrSheetGenerator';
-import { encodeCommitmentQrPayload, loadVeluxLogo, drawVeluxLogo } from './commitmentQr';
+import { loadVeluxLogo, drawVeluxLogo } from './commitmentQr';
 
 export type DymoLabelSizeId = '70x54' | '101x54' | '89x36' | '57x32' | '102x152';
 
@@ -109,9 +109,61 @@ export async function detectDymoPrinters(): Promise<DymoPrinterInfo[]> {
   return [];
 }
 
+function fitDymoWrappedLines(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidthPx: number,
+  maxHeightPx: number,
+  maxFontPx: number,
+  minFontPx: number,
+  fontWeight: string,
+  fontFamily: string,
+  maxLines = 3
+): { fontPx: number; lineHeightPx: number; lines: string[] } {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  for (let f = maxFontPx; f >= minFontPx; f -= 2) {
+    ctx.font = `${fontWeight} ${f}px ${fontFamily}`;
+    const lines: string[] = [];
+    let current = '';
+    for (const w of words) {
+      const cand = current ? `${current} ${w}` : w;
+      if (ctx.measureText(cand).width <= maxWidthPx) {
+        current = cand;
+      } else {
+        if (current) lines.push(current);
+        current = w;
+      }
+    }
+    if (current) lines.push(current);
+    const lineHeightPx = Math.round(f * 1.15);
+    if (lines.length <= maxLines && lines.length * lineHeightPx <= maxHeightPx) {
+      return { fontPx: f, lineHeightPx, lines };
+    }
+  }
+  ctx.font = `${fontWeight} ${minFontPx}px ${fontFamily}`;
+  const fallback: string[] = [];
+  let cur = '';
+  for (const w of words) {
+    const cand = cur ? `${cur} ${w}` : w;
+    if (ctx.measureText(cand).width <= maxWidthPx) cur = cand;
+    else {
+      if (cur) fallback.push(cur);
+      cur = w;
+    }
+  }
+  if (cur) fallback.push(cur);
+  return {
+    fontPx: minFontPx,
+    lineHeightPx: Math.round(minFontPx * 1.15),
+    lines: fallback.slice(0, maxLines),
+  };
+}
+
 /**
- * Renders a crisp 300-DPI thermal-ready landscape label canvas for a Customer Commitment
- * sized proportionally to the selected DYMO roll.
+ * Renders a crisp 300-DPI thermal-ready DYMO label canvas for a Customer Commitment
+ * (NO QR code):
+ * - Standard: Logo Saggin ben visibile + Numero Impegno IN GRANDE + Nome Cliente (+ Note)
+ * - VELUX: Logo Saggin + Logo VELUX + Numero Impegno IN GRANDE + Nome Cliente + Installatore (+ Note)
  */
 export async function renderCommitmentDymoCanvas(
   commitment: CustomerCommitment,
@@ -126,6 +178,8 @@ export async function renderCommitmentDymoCanvas(
   const [sagginImg, veluxImg] = await Promise.all([loadSagginLogo(), loadVeluxLogo()]);
   const isVelux = commitment.category === 'VELUX';
   const hasInstaller = Boolean(commitment.installer_name && commitment.installer_name.trim());
+  const cleanNotes = (commitment.notes || '').trim();
+  const hasNotes = Boolean(cleanNotes);
 
   const canvas = document.createElement('canvas');
   canvas.width = W;
@@ -135,233 +189,240 @@ export async function renderCommitmentDymoCanvas(
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
 
-  const qrPayload = encodeCommitmentQrPayload(commitment);
-  const pad = Math.round(2.2 * PX_PER_MM);
+  const isPortraitMaxi = fmt.id === '102x152';
+  const outerMargin = Math.round((isPortraitMaxi ? 2.5 : 1.4) * PX_PER_MM);
+  const pad = outerMargin + Math.round((isPortraitMaxi ? 3.5 : 2.0) * PX_PER_MM);
+  const innerW = W - pad * 2;
 
-  // Portrait 102x152 uses vertical stack; landscape rolls use QR on left + details on right
-  if (fmt.id === '102x152') {
-    const qrSize = Math.round(W * 0.68);
-    const qrCanvas = document.createElement('canvas');
-    await QRCode.toCanvas(qrCanvas, qrPayload, {
-      width: qrSize,
-      margin: 3,
-      errorCorrectionLevel: 'M',
-      color: { dark: '#000000', light: '#ffffff' },
-    });
+  // Crisp pure-black outer thermal frame
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = Math.max(3, Math.round((isPortraitMaxi ? 0.55 : 0.35) * PX_PER_MM));
+  ctx.beginPath();
+  ctx.roundRect(
+    outerMargin,
+    outerMargin,
+    W - outerMargin * 2,
+    H - outerMargin * 2,
+    Math.round((isPortraitMaxi ? 3.0 : 1.8) * PX_PER_MM)
+  );
+  ctx.stroke();
 
-    // Top logos
-    let y = pad + 12;
-    if (isVelux) {
-      if (sagginImg) {
-        const sh = 64;
-        const sw = (sagginImg.width / sagginImg.height) * sh;
-        ctx.drawImage(sagginImg, W / 2 - 20 - sw, y, sw, sh);
-      }
-      if (veluxImg) {
-        const vh = 64;
-        const vw = (veluxImg.width / veluxImg.height) * vh;
-        ctx.drawImage(veluxImg, W / 2 + 20, y, vw, vh);
-      } else {
-        drawVeluxLogo(ctx, W / 2 + 20, y, 180, 64);
-      }
-    } else if (sagginImg) {
-      const sh = 70;
-      const sw = (sagginImg.width / sagginImg.height) * sh;
-      ctx.drawImage(sagginImg, (W - sw) / 2, y, sw, sh);
-    }
-
-    y += 96;
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(pad, y, W - pad * 2, 76);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '900 40px "JetBrains Mono", monospace';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(`IMPEGNO N° ${commitment.commitment_number}`, W / 2, y + 38, W - pad * 4);
-
-    y += 96;
-    ctx.drawImage(qrCanvas, (W - qrSize) / 2, y, qrSize, qrSize);
-
-    y += qrSize + 28;
-    ctx.fillStyle = '#000000';
-    ctx.font = '900 44px "Plus Jakarta Sans", Arial, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText((commitment.customer_name || 'CLIENTE').toUpperCase(), W / 2, y, W - pad * 2);
-
-    if (hasInstaller) {
-      y += 66;
-      ctx.font = '800 32px "Plus Jakarta Sans", Arial, sans-serif';
-      ctx.fillText(`INST: ${(commitment.installer_name || '').toUpperCase()}`, W / 2, y, W - pad * 2);
-    }
-    return canvas;
-  }
-
-  // Compact 70x54 (DYMO 99015) uses full-width header (logos + IMP bar) and QR left + wrapped customer right
-  if (fmt.id === '70x54') {
-    let cursorY = pad;
-
-    // Top Logos row
-    const logoH = Math.round(7.5 * PX_PER_MM);
-    if (isVelux) {
-      let lx = pad;
-      if (sagginImg) {
-        const sw = (sagginImg.width / sagginImg.height) * logoH;
-        ctx.drawImage(sagginImg, lx, cursorY, sw, logoH);
-        lx += sw + Math.round(2 * PX_PER_MM);
-      }
-      if (veluxImg) {
-        const vw = (veluxImg.width / veluxImg.height) * logoH;
-        ctx.drawImage(veluxImg, lx, cursorY, vw, logoH);
-      } else {
-        drawVeluxLogo(ctx, lx, cursorY, Math.round(logoH * 2.8), logoH);
-      }
-    } else if (sagginImg) {
-      const sw = (sagginImg.width / sagginImg.height) * logoH;
-      ctx.drawImage(sagginImg, pad, cursorY, sw, logoH);
-    }
-
-    cursorY += logoH + Math.round(1.4 * PX_PER_MM);
-
-    // Full-width Commitment Number Bar
-    const barH = Math.round(7.5 * PX_PER_MM);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(pad, cursorY, W - pad * 2, barH);
-    ctx.fillStyle = '#ffffff';
-    ctx.font = `900 ${Math.round(barH * 0.56)}px "JetBrains Mono", monospace`;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(
-      `IMPEGNO N° ${commitment.commitment_number}`,
-      pad + Math.round(1.6 * PX_PER_MM),
-      cursorY + barH / 2,
-      W - pad * 2 - Math.round(3.2 * PX_PER_MM)
-    );
-
-    cursorY += barH + Math.round(1.8 * PX_PER_MM);
-
-    // Bottom split: Left QR + Right Customer Name (+ Installer for VELUX)
-    const availH = H - cursorY - pad;
-    const qrSize = Math.min(availH, Math.round(31 * PX_PER_MM));
-    const qrCanvas = document.createElement('canvas');
-    await QRCode.toCanvas(qrCanvas, qrPayload, {
-      width: qrSize,
-      margin: 2,
-      errorCorrectionLevel: 'M',
-      color: { dark: '#000000', light: '#ffffff' },
-    });
-    ctx.drawImage(qrCanvas, pad, cursorY, qrSize, qrSize);
-
-    const rightX = pad + qrSize + Math.round(2.4 * PX_PER_MM);
-    const rightW = W - rightX - pad;
-
-    // Word-wrap customer name cleanly
-    const custName = (commitment.customer_name || 'CLIENTE').toUpperCase();
-    const custFont = Math.round(4.6 * PX_PER_MM);
-    ctx.fillStyle = '#000000';
-    ctx.font = `900 ${custFont}px "Plus Jakarta Sans", Arial, sans-serif`;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-
-    const words = custName.split(/\s+/);
-    const lines: string[] = [];
-    let curLine = '';
-    for (const w of words) {
-      const cand = curLine ? `${curLine} ${w}` : w;
-      if (ctx.measureText(cand).width <= rightW) {
-        curLine = cand;
-      } else {
-        if (curLine) lines.push(curLine);
-        curLine = w;
-      }
-    }
-    if (curLine) lines.push(curLine);
-
-    const lineH = Math.round(custFont * 1.18);
-    const maxCustLines = hasInstaller ? 3 : 4;
-    lines.slice(0, maxCustLines).forEach((l, idx) => {
-      ctx.fillText(l, rightX, cursorY + idx * lineH, rightW);
-    });
-
-    if (hasInstaller) {
-      const instY = cursorY + Math.min(lines.length, maxCustLines) * lineH + Math.round(1.8 * PX_PER_MM);
-      ctx.fillStyle = '#000000';
-      ctx.font = `800 ${Math.round(3.4 * PX_PER_MM)}px "Plus Jakarta Sans", Arial, sans-serif`;
-      ctx.fillText(`INST: ${(commitment.installer_name || '').toUpperCase()}`, rightX, instY, rightW);
-    }
-
-    return canvas;
-  }
-
-  // Wide Landscape DYMO roll (101x54, 89x36, 57x32)
-  const qrSize = H - pad * 2;
-  const qrCanvas = document.createElement('canvas');
-  await QRCode.toCanvas(qrCanvas, qrPayload, {
-    width: qrSize,
-    margin: 2,
-    errorCorrectionLevel: 'M',
-    color: { dark: '#000000', light: '#ffffff' },
-  });
-
-  // Left: Crisp QR code
-  ctx.drawImage(qrCanvas, pad, pad, qrSize, qrSize);
-
-  // Right column
-  const rightX = pad + qrSize + Math.round(2.5 * PX_PER_MM);
-  const rightW = W - rightX - pad;
+  // 1. Top Logos Section (Saggin centered, or Saggin + divider + VELUX)
   let cursorY = pad;
+  const logoH = isPortraitMaxi
+    ? Math.round(13.5 * PX_PER_MM)
+    : Math.round(Math.min(H * 0.21, 12.5 * PX_PER_MM));
 
-  // Top Logo Row
-  const logoH = Math.round(H * 0.16);
   if (isVelux) {
-    let lx = rightX;
+    const gap = Math.round((isPortraitMaxi ? 3.6 : 2.2) * PX_PER_MM);
+    const maxLogoW = (innerW - gap * 2) / 2;
+    const sw = sagginImg ? Math.min(maxLogoW, (sagginImg.width / sagginImg.height) * logoH) : 0;
+    const sh = sagginImg ? sw * (sagginImg.height / sagginImg.width) : 0;
+    const vw = veluxImg
+      ? Math.min(maxLogoW, (veluxImg.width / veluxImg.height) * logoH)
+      : Math.min(maxLogoW, logoH * 2.6);
+    const vh = veluxImg ? vw * (veluxImg.height / veluxImg.width) : Math.round(logoH * 0.88);
+    const totalLogosW = sw + (sw > 0 ? gap * 2 : 0) + vw;
+    let lx = (W - totalLogosW) / 2;
+
     if (sagginImg) {
-      const sw = (sagginImg.width / sagginImg.height) * logoH;
-      ctx.drawImage(sagginImg, lx, cursorY, sw, logoH);
-      lx += sw + Math.round(1.8 * PX_PER_MM);
+      ctx.drawImage(sagginImg, lx, cursorY + (logoH - sh) / 2, sw, sh);
+      lx += sw + gap;
+
+      // Vertical separator between Saggin and VELUX logos
+      ctx.strokeStyle = '#000000';
+      ctx.lineWidth = Math.max(2, Math.round(0.22 * PX_PER_MM));
+      ctx.beginPath();
+      ctx.moveTo(lx, cursorY + Math.round(logoH * 0.14));
+      ctx.lineTo(lx, cursorY + Math.round(logoH * 0.86));
+      ctx.stroke();
+      lx += gap;
     }
+
     if (veluxImg) {
-      const vw = (veluxImg.width / veluxImg.height) * logoH;
-      ctx.drawImage(veluxImg, lx, cursorY, vw, logoH);
+      ctx.drawImage(veluxImg, lx, cursorY + (logoH - vh) / 2, vw, vh);
     } else {
-      drawVeluxLogo(ctx, lx, cursorY, Math.round(logoH * 2.8), logoH);
+      drawVeluxLogo(ctx, lx, cursorY + (logoH - vh) / 2, vw, vh);
     }
   } else if (sagginImg) {
-    const sw = (sagginImg.width / sagginImg.height) * logoH;
-    ctx.drawImage(sagginImg, rightX, cursorY, sw, logoH);
+    const sw = Math.min(innerW * 0.86, (sagginImg.width / sagginImg.height) * logoH);
+    const sh = sw * (sagginImg.height / sagginImg.width);
+    ctx.drawImage(sagginImg, (W - sw) / 2, cursorY + (logoH - sh) / 2, sw, sh);
   }
 
-  cursorY += logoH + Math.round(1.5 * PX_PER_MM);
+  cursorY += logoH + Math.round((isPortraitMaxi ? 2.8 : 1.4) * PX_PER_MM);
 
-  // Commitment Number Bar
-  const barH = Math.round(H * 0.18);
+  // Subtle divider line below logos
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = Math.max(2, Math.round(0.18 * PX_PER_MM));
+  ctx.beginPath();
+  ctx.moveTo(pad, cursorY);
+  ctx.lineTo(W - pad, cursorY);
+  ctx.stroke();
+
+  cursorY += Math.round((isPortraitMaxi ? 3.2 : 1.6) * PX_PER_MM);
+
+  // 2. HERO COMMITMENT NUMBER BANNER (High contrast black box + GIANT number)
+  const bannerH = isPortraitMaxi
+    ? Math.round(30 * PX_PER_MM)
+    : Math.round(H * 0.25);
+
   ctx.fillStyle = '#000000';
-  ctx.fillRect(rightX, cursorY, rightW, barH);
+  ctx.beginPath();
+  ctx.roundRect(
+    pad,
+    cursorY,
+    innerW,
+    bannerH,
+    Math.round((isPortraitMaxi ? 2.4 : 1.4) * PX_PER_MM)
+  );
+  ctx.fill();
+
+  const numText = (commitment.commitment_number || '—').trim();
+  const smallCaptionFont = Math.max(
+    14,
+    Math.round(bannerH * (isPortraitMaxi ? 0.14 : 0.18))
+  );
   ctx.fillStyle = '#ffffff';
-  ctx.font = `900 ${Math.round(barH * 0.56)}px "JetBrains Mono", monospace`;
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'middle';
+  ctx.font = `800 ${smallCaptionFont}px "JetBrains Mono", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
   ctx.fillText(
-    `IMP. ${commitment.commitment_number}`,
-    rightX + Math.round(1.5 * PX_PER_MM),
-    cursorY + barH / 2,
-    rightW - Math.round(3 * PX_PER_MM)
+    isVelux ? 'IMPEGNO CLIENTE VELUX N°' : 'IMPEGNO CLIENTE N°',
+    W / 2,
+    cursorY + Math.round(bannerH * 0.10),
+    innerW - Math.round(3 * PX_PER_MM)
   );
 
-  cursorY += barH + Math.round(1.8 * PX_PER_MM);
+  let numFont = Math.round(bannerH * (isPortraitMaxi ? 0.48 : 0.56));
+  const minNumFont = Math.round(bannerH * 0.26);
+  const maxNumW = innerW - Math.round(4 * PX_PER_MM);
+  while (numFont > minNumFont) {
+    ctx.font = `900 ${numFont}px "JetBrains Mono", monospace`;
+    if (ctx.measureText(numText).width <= maxNumW) break;
+    numFont -= 2;
+  }
+  ctx.fillStyle = '#ffffff';
+  ctx.font = `900 ${numFont}px "JetBrains Mono", monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(
+    numText,
+    W / 2,
+    cursorY + Math.round(bannerH * 0.62),
+    maxNumW
+  );
 
-  // Customer Name
+  cursorY += bannerH + Math.round((isPortraitMaxi ? 4.0 : 1.8) * PX_PER_MM);
+
+  // Reserve bottom area for Installer (if present) and optional Notes (on >= 50mm height labels)
+  const showNotes = hasNotes && (isPortraitMaxi || fmt.heightMm >= 50);
+  const instBoxH = hasInstaller
+    ? isPortraitMaxi
+      ? Math.round(18 * PX_PER_MM)
+      : Math.round(H * 0.145)
+    : 0;
+  const notesH = showNotes
+    ? isPortraitMaxi
+      ? Math.round(11 * PX_PER_MM)
+      : Math.round(H * 0.065)
+    : 0;
+
+  const bottomAreaH =
+    (hasInstaller ? instBoxH + Math.round((isPortraitMaxi ? 2.4 : 1.0) * PX_PER_MM) : 0) +
+    (showNotes ? notesH + Math.round((isPortraitMaxi ? 1.6 : 0.8) * PX_PER_MM) : 0);
+
+  const custAvailH = Math.max(24, H - pad - bottomAreaH - cursorY);
+
+  // 3. CUSTOMER NAME SECTION (Giant, bold, wrapped cleanly)
+  const custCaptionFont = isPortraitMaxi
+    ? Math.round(3.0 * PX_PER_MM)
+    : Math.max(12, Math.round(H * 0.038));
   ctx.fillStyle = '#000000';
-  const custFont = Math.round(H * (hasInstaller ? 0.14 : 0.17));
-  ctx.font = `900 ${custFont}px "Plus Jakarta Sans", Arial, sans-serif`;
-  ctx.textAlign = 'left';
+  ctx.font = `800 ${custCaptionFont}px "JetBrains Mono", monospace`;
+  ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillText((commitment.customer_name || 'CLIENTE').toUpperCase(), rightX, cursorY, rightW);
+  ctx.fillText('CLIENTE', W / 2, cursorY);
+
+  const custTopY = cursorY + custCaptionFont + Math.round(0.6 * PX_PER_MM);
+  const custTextAvailH = Math.max(20, custAvailH - (custCaptionFont + Math.round(0.6 * PX_PER_MM)));
+
+  const custName = (commitment.customer_name || 'CLIENTE').toUpperCase();
+  const maxCustFont = isPortraitMaxi
+    ? Math.round(9.5 * PX_PER_MM)
+    : Math.round(Math.min(custTextAvailH * 0.72, H * 0.14));
+  const minCustFont = isPortraitMaxi
+    ? Math.round(4.0 * PX_PER_MM)
+    : Math.max(16, Math.round(H * 0.055));
+
+  const custFit = fitDymoWrappedLines(
+    ctx,
+    custName,
+    innerW - Math.round(2 * PX_PER_MM),
+    custTextAvailH,
+    maxCustFont,
+    minCustFont,
+    '900',
+    '"Plus Jakarta Sans", Arial, sans-serif',
+    isPortraitMaxi ? 4 : 3
+  );
+
+  const custBlockH = custFit.lines.length * custFit.lineHeightPx;
+  const custStartY = custTopY + Math.max(0, (custTextAvailH - custBlockH) / 2);
+
+  ctx.fillStyle = '#000000';
+  ctx.font = `900 ${custFit.fontPx}px "Plus Jakarta Sans", Arial, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  custFit.lines.forEach((line, idx) => {
+    ctx.fillText(line, W / 2, custStartY + idx * custFit.lineHeightPx, innerW - Math.round(2 * PX_PER_MM));
+  });
+
+  // 4. INSTALLER BOX (Highlighted bold frame for VELUX / Installer)
+  const footerBottomY = H - pad - (showNotes ? notesH + Math.round((isPortraitMaxi ? 1.4 : 0.6) * PX_PER_MM) : 0);
 
   if (hasInstaller) {
-    cursorY += Math.round(custFont * 1.25);
-    ctx.font = `800 ${Math.round(H * 0.11)}px "Plus Jakarta Sans", Arial, sans-serif`;
-    ctx.fillText(`INST: ${(commitment.installer_name || '').toUpperCase()}`, rightX, cursorY, rightW);
+    const instY = footerBottomY - instBoxH;
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = Math.max(2.5, Math.round((isPortraitMaxi ? 0.35 : 0.25) * PX_PER_MM));
+    ctx.beginPath();
+    ctx.roundRect(
+      pad,
+      instY,
+      innerW,
+      instBoxH,
+      Math.round((isPortraitMaxi ? 2.0 : 1.2) * PX_PER_MM)
+    );
+    ctx.fill();
+    ctx.stroke();
+
+    const instFont = isPortraitMaxi
+      ? Math.round(4.6 * PX_PER_MM)
+      : Math.max(14, Math.round(instBoxH * 0.48));
+    ctx.fillStyle = '#000000';
+    ctx.font = `900 ${instFont}px "Plus Jakarta Sans", Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(
+      `INSTALLATORE: ${(commitment.installer_name || '').toUpperCase()}`,
+      W / 2,
+      instY + instBoxH / 2 + 1,
+      innerW - Math.round(3 * PX_PER_MM)
+    );
+  }
+
+  // 5. OPTIONAL NOTES FOOTER
+  if (showNotes) {
+    const noteY = H - pad - notesH / 2;
+    const noteFont = isPortraitMaxi
+      ? Math.round(2.8 * PX_PER_MM)
+      : Math.max(12, Math.round(notesH * 0.56));
+    ctx.fillStyle = '#000000';
+    ctx.font = `700 ${noteFont}px "Plus Jakarta Sans", Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`NOTE: ${cleanNotes}`, W / 2, noteY, innerW - Math.round(2 * PX_PER_MM));
   }
 
   return canvas;

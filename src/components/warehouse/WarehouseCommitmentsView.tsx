@@ -179,7 +179,7 @@ export const WarehouseCommitmentsView: React.FC<WarehouseCommitmentsViewProps> =
     const url = canvas.toDataURL('image/png');
     const link = document.createElement('a');
     link.href = url;
-    link.download = `QR_Impegno_${previewCommitment.commitment_number}_${previewCommitment.customer_name
+    link.download = `Impegno_${previewCommitment.commitment_number}_${previewCommitment.customer_name
       .replace(/[^a-zA-Z0-9_-]/g, '_')
       .slice(0, 24)}.png`;
     link.click();
@@ -496,7 +496,7 @@ export const WarehouseCommitmentsView: React.FC<WarehouseCommitmentsViewProps> =
         headerTone={previewCommitment?.category === 'VELUX' ? 'velux' : 'dark'}
         title={
           previewCommitment
-            ? `Etichetta QR Impegno N° ${previewCommitment.commitment_number} · ${previewCommitment.customer_name}`
+            ? `Etichetta Impegno N° ${previewCommitment.commitment_number} · ${previewCommitment.customer_name}`
             : ''
         }
         subtitle="Stampa su rotolo termico DYMO oppure su foglio A4 / PDF"
@@ -513,7 +513,7 @@ export const WarehouseCommitmentsView: React.FC<WarehouseCommitmentsViewProps> =
                 previewDataUrl && (
                   <img
                     src={previewDataUrl}
-                    alt="Etichetta QR Impegno Cliente"
+                    alt="Etichetta Impegno Cliente"
                     className="max-w-full max-h-[340px] rounded-xl shadow-md border border-slate-300 bg-white object-contain"
                   />
                 )

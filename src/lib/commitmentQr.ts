@@ -1,4 +1,3 @@
-import QRCode from 'qrcode';
 import { CustomerCommitment, CommitmentItem, CommitmentCategory } from '../types';
 import { loadSagginLogo, buildPdfFromJpegDataUrls } from './qrSheetGenerator';
 
@@ -199,10 +198,36 @@ function wrapSimpleText(
 }
 
 /**
- * Renders a minimal, clean, modern Commitment QR Sticker Card:
- * - Standard: Logo Saggin + QR Code + Numero Impegno + Nome Cliente (+ Installatore se presente)
- * - VELUX: Logo Saggin + Logo VELUX ufficiale + QR Code + Numero Impegno + Nome Cliente + Installatore
- * Zero extra tables or clutter.
+ * Auto-fits wrapped text lines cleanly inside maxWidthPx & maxHeightPx
+ */
+function fitWrappedText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidthPx: number,
+  maxHeightPx: number,
+  maxFontPx: number,
+  minFontPx: number,
+  fontWeight: string,
+  fontFamily: string,
+  maxLines = 3
+): { fontPx: number; lineHeightPx: number; lines: string[] } {
+  for (let f = maxFontPx; f >= minFontPx; f -= 2) {
+    ctx.font = `${fontWeight} ${f}px ${fontFamily}`;
+    const wrapped = wrapSimpleText(ctx, text, maxWidthPx);
+    const lineHeightPx = Math.round(f * 1.16);
+    if (wrapped.length <= maxLines && wrapped.length * lineHeightPx <= maxHeightPx) {
+      return { fontPx: f, lineHeightPx, lines: wrapped };
+    }
+  }
+  ctx.font = `${fontWeight} ${minFontPx}px ${fontFamily}`;
+  const fallback = wrapSimpleText(ctx, text, maxWidthPx).slice(0, maxLines);
+  return { fontPx: minFontPx, lineHeightPx: Math.round(minFontPx * 1.16), lines: fallback };
+}
+
+/**
+ * Renders a clean, high-impact Customer Commitment label (NO QR code):
+ * - Standard: Logo Saggin ben visibile + Numero Impegno IN GRANDE + Nome Cliente (+ Note/Collo)
+ * - VELUX: Logo Saggin + Logo VELUX affiancati + Numero Impegno IN GRANDE + Nome Cliente + Nome Installatore (+ Note/Collo)
  */
 export async function renderCommitmentLabelCanvas(
   commitment: CustomerCommitment,
@@ -211,176 +236,195 @@ export async function renderCommitmentLabelCanvas(
   const [sagginImg, veluxImg] = await Promise.all([loadSagginLogo(), loadVeluxLogo()]);
   const isVelux = commitment.category === 'VELUX';
   const hasInstaller = Boolean(commitment.installer_name && commitment.installer_name.trim());
+  const cleanNotes = (commitment.notes || '').trim();
+  const hasNotes = Boolean(cleanNotes);
 
-  const W = 760;
-  const H = hasInstaller ? 920 : 850;
+  const W = 860;
+  const H = hasInstaller || hasNotes ? 680 : 620;
 
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext('2d')!;
 
-  // Pure white background
+  // Crisp pure white background
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
 
-  // Clean outer rounded card frame
+  // Outer corporate border frame
   const borderPad = 14;
-  ctx.strokeStyle = isVelux ? '#e30613' : '#0f172a';
-  ctx.lineWidth = 5;
+  const accentColor = isVelux ? '#e30613' : '#0f172a';
+  ctx.strokeStyle = accentColor;
+  ctx.lineWidth = 6;
   ctx.beginPath();
-  ctx.roundRect(borderPad, borderPad, W - borderPad * 2, H - borderPad * 2, 28);
+  ctx.roundRect(borderPad, borderPad, W - borderPad * 2, H - borderPad * 2, 26);
   ctx.stroke();
 
-  // 1. Top Brand Logo Header (Clean White Area with Saggin Logo & VELUX Logo)
-  const topBarY = borderPad + 24;
-  const logoAreaH = 74;
+  // Subtle top accent stripe inside border
+  const innerX = borderPad + 24;
+  const innerW = W - innerX * 2;
+  let cursorY = borderPad + 24;
+
+  // 1. Top Brand Logo Row (Saggin centered, or Saggin + divider + VELUX side-by-side)
+  const logoAreaH = 86;
+  const hasColloBadge = Boolean(colloNumber && colloNumber.total > 1);
 
   if (isVelux) {
-    // Left: Saggin Logo | Divider | Right: Official VELUX Logo
-    const centerX = W / 2;
-
+    const centerX = hasColloBadge ? W / 2 - 55 : W / 2;
     if (sagginImg) {
-      const sh = 58;
+      const sh = 68;
       const sw = (sagginImg.width / sagginImg.height) * sh;
-      ctx.drawImage(sagginImg, centerX - 28 - sw, topBarY + (logoAreaH - sh) / 2, sw, sh);
+      ctx.drawImage(sagginImg, centerX - 24 - sw, cursorY + (logoAreaH - sh) / 2, sw, sh);
     }
 
-    // Subtle vertical divider between Saggin and VELUX logos
     ctx.strokeStyle = '#cbd5e1';
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.moveTo(centerX, topBarY + 10);
-    ctx.lineTo(centerX, topBarY + logoAreaH - 10);
+    ctx.moveTo(centerX, cursorY + 12);
+    ctx.lineTo(centerX, cursorY + logoAreaH - 12);
     ctx.stroke();
 
     if (veluxImg) {
-      const vh = 60;
+      const vh = 70;
       const vw = (veluxImg.width / veluxImg.height) * vh;
-      ctx.drawImage(veluxImg, centerX + 28, topBarY + (logoAreaH - vh) / 2, vw, vh);
+      ctx.drawImage(veluxImg, centerX + 24, cursorY + (logoAreaH - vh) / 2, vw, vh);
     } else {
-      drawVeluxLogo(ctx, centerX + 28, topBarY + 8, 175, 58);
+      drawVeluxLogo(ctx, centerX + 24, cursorY + 10, 200, 66);
     }
-  } else {
-    // Standard Commitment: Saggin Logo centered at top
-    if (sagginImg) {
-      const sh = 64;
-      const sw = (sagginImg.width / sagginImg.height) * sh;
-      ctx.drawImage(sagginImg, (W - sw) / 2, topBarY + (logoAreaH - sh) / 2, sw, sh);
-    }
+  } else if (sagginImg) {
+    const sh = 78;
+    const sw = (sagginImg.width / sagginImg.height) * sh;
+    const logoX = hasColloBadge ? innerX + 6 : (W - sw) / 2;
+    ctx.drawImage(sagginImg, logoX, cursorY + (logoAreaH - sh) / 2, sw, sh);
   }
 
-  let cursorY = topBarY + logoAreaH + 18;
+  // Optional COLLO X / Y badge on top-right when multiple packages are printed
+  if (hasColloBadge && colloNumber) {
+    const badgeW = 144;
+    const badgeH = 44;
+    const badgeX = W - innerX - badgeW;
+    const badgeY = cursorY + (logoAreaH - badgeH) / 2;
+    ctx.fillStyle = '#f1f5f9';
+    ctx.strokeStyle = accentColor;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 12);
+    ctx.fill();
+    ctx.stroke();
 
-  // 2. Commitment Number Pill (IMPEGNO N° ...)
-  const pillW = W - 96;
-  const pillH = 66;
-  const pillX = 48;
+    ctx.fillStyle = accentColor;
+    ctx.font = '900 20px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`COLLO ${colloNumber.current}/${colloNumber.total}`, badgeX + badgeW / 2, badgeY + badgeH / 2 + 1);
+  }
 
-  ctx.fillStyle = isVelux ? '#e30613' : '#0f172a';
+  cursorY += logoAreaH + 18;
+
+  // 2. HERO COMMITMENT NUMBER BANNER (Massive, impossible to miss)
+  const bannerH = 152;
+  ctx.fillStyle = accentColor;
   ctx.beginPath();
-  ctx.roundRect(pillX, cursorY, pillW, pillH, 16);
+  ctx.roundRect(innerX, cursorY, innerW, bannerH, 20);
   ctx.fill();
 
-  const impLabel =
-    colloNumber && colloNumber.total > 1
-      ? `IMPEGNO N° ${commitment.commitment_number}  ·  COLLO ${colloNumber.current}/${colloNumber.total}`
-      : `IMPEGNO N° ${commitment.commitment_number}`;
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.font = '800 18px "JetBrains Mono", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(
+    isVelux ? 'IMPEGNO CLIENTE VELUX N°' : 'IMPEGNO CLIENTE N°',
+    W / 2,
+    cursorY + 16
+  );
 
+  const numText = (commitment.commitment_number || '—').trim();
+  let numFont = 82;
+  while (numFont > 38) {
+    ctx.font = `900 ${numFont}px "JetBrains Mono", monospace`;
+    if (ctx.measureText(numText).width <= innerW - 48) break;
+    numFont -= 4;
+  }
   ctx.fillStyle = '#ffffff';
-  ctx.font = `900 ${impLabel.length > 26 ? 26 : 31}px "JetBrains Mono", monospace`;
+  ctx.font = `900 ${numFont}px "JetBrains Mono", monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(impLabel, W / 2, cursorY + pillH / 2 + 1, pillW - 32);
+  ctx.fillText(numText, W / 2, cursorY + 92, innerW - 40);
 
-  cursorY += pillH + 20;
+  cursorY += bannerH + 26;
 
-  // 3. Pure, Unobstructed High-Contrast QR Code in the Center
-  const qrPayload = encodeCommitmentQrPayload(commitment);
-  const qrSize = 440;
-  const qrCanvas = document.createElement('canvas');
-  await QRCode.toCanvas(qrCanvas, qrPayload, {
-    width: qrSize,
-    margin: 3,
-    errorCorrectionLevel: 'M',
-    color: { dark: '#000000', light: '#ffffff' },
-  });
+  // Reserve bottom space for Installer and/or Notes
+  const installerBoxH = hasInstaller ? 64 : 0;
+  const notesH = hasNotes ? 34 : 0;
+  const bottomReserve =
+    (hasInstaller ? installerBoxH + 16 : 0) + (hasNotes ? notesH + 10 : 0) + borderPad + 20;
+  const customerAvailH = H - cursorY - bottomReserve;
 
-  const qrX = (W - qrSize) / 2;
-  ctx.drawImage(qrCanvas, qrX, cursorY, qrSize, qrSize);
-
-  cursorY += qrSize + 16;
-
-  // Subtle horizontal divider above Customer Name
-  ctx.strokeStyle = '#e2e8f0';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(64, cursorY);
-  ctx.lineTo(W - 64, cursorY);
-  ctx.stroke();
-
-  cursorY += 18;
-
-  // 4. Customer Name (Large, Bold, Centered)
+  // 3. CUSTOMER NAME (Huge, bold, auto-fitted cleanly up to 3 lines)
   ctx.fillStyle = '#64748b';
   ctx.font = '800 16px "JetBrains Mono", monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText('CLIENTE', W / 2, cursorY);
 
-  cursorY += 24;
-
+  cursorY += 26;
   const custName = (commitment.customer_name || 'CLIENTE').toUpperCase();
-  const maxCustW = W - 96;
-  let custFont = 40;
-  let custLines: string[] = [custName];
+  const custFit = fitWrappedText(
+    ctx,
+    custName,
+    innerW - 16,
+    Math.max(80, customerAvailH - 26),
+    58,
+    26,
+    '900',
+    '"Plus Jakarta Sans", Arial, sans-serif',
+    3
+  );
 
-  for (let f = 40; f >= 24; f -= 2) {
-    ctx.font = `900 ${f}px "Plus Jakarta Sans", Arial, sans-serif`;
-    const wrapped = wrapSimpleText(ctx, custName, maxCustW);
-    if (wrapped.length === 1 || (wrapped.length <= 2 && f <= 30)) {
-      custFont = f;
-      custLines = wrapped.slice(0, 2);
-      break;
-    }
-  }
+  const totalCustBlockH = custFit.lines.length * custFit.lineHeightPx;
+  const custStartY = cursorY + Math.max(0, (customerAvailH - 26 - totalCustBlockH) / 2);
 
   ctx.fillStyle = '#0f172a';
-  ctx.font = `900 ${custFont}px "Plus Jakarta Sans", Arial, sans-serif`;
+  ctx.font = `900 ${custFit.fontPx}px "Plus Jakarta Sans", Arial, sans-serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  const lineH = Math.round(custFont * 1.15);
-  custLines.forEach((line, idx) => {
-    ctx.fillText(line, W / 2, cursorY + idx * lineH, maxCustW);
+  custFit.lines.forEach((line, idx) => {
+    ctx.fillText(line, W / 2, custStartY + idx * custFit.lineHeightPx, innerW - 16);
   });
 
-  cursorY += custLines.length * lineH + 16;
+  // 4. INSTALLER BOX (Highlighted pill for VELUX / custom installer)
+  let footerY = H - borderPad - 22 - (hasNotes ? notesH + 10 : 0);
 
-  // 5. Installer Badge (if VELUX or if installer is specified)
   if (hasInstaller) {
-    const instBoxW = W - 120;
-    const instBoxH = 54;
-    const instBoxX = 60;
-    const instBoxY = Math.min(cursorY, H - borderPad - instBoxH - 22);
-
-    ctx.fillStyle = '#f8fafc';
-    ctx.strokeStyle = isVelux ? '#fecdd3' : '#cbd5e1';
-    ctx.lineWidth = 2.5;
+    const instY = footerY - installerBoxH;
+    ctx.fillStyle = isVelux ? '#fff1f2' : '#f8fafc';
+    ctx.strokeStyle = isVelux ? '#e30613' : '#334155';
+    ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.roundRect(instBoxX, instBoxY, instBoxW, instBoxH, 14);
+    ctx.roundRect(innerX + 24, instY, innerW - 48, installerBoxH, 14);
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle = isVelux ? '#e30613' : '#0f172a';
-    ctx.font = '900 23px "Plus Jakarta Sans", Arial, sans-serif';
+    ctx.fillStyle = isVelux ? '#be123c' : '#0f172a';
+    ctx.font = '900 28px "Plus Jakarta Sans", Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(
       `INSTALLATORE: ${(commitment.installer_name || '').toUpperCase()}`,
       W / 2,
-      instBoxY + instBoxH / 2 + 1,
-      instBoxW - 28
+      instY + installerBoxH / 2 + 1,
+      innerW - 84
     );
+  }
+
+  // 5. OPTIONAL NOTES LINE
+  if (hasNotes) {
+    const noteY = H - borderPad - 20 - notesH / 2;
+    ctx.fillStyle = '#475569';
+    ctx.font = '700 18px "Plus Jakarta Sans", Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`NOTE: ${cleanNotes}`, W / 2, noteY, innerW - 24);
   }
 
   return canvas;
